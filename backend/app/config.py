@@ -19,8 +19,7 @@ class Settings(BaseSettings):
     CHROMADB_PORT: int = 8000
 
     PUBLIC_DATA_API_KEY: str = ""
-    NAVER_CLIENT_ID: str = ""
-    NAVER_CLIENT_SECRET: str = ""
+    ONBID_API_KEY: str = ""
 
     LLM_MODEL_PATH: str = "beomi/Llama-3-Open-Ko-8B"
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
