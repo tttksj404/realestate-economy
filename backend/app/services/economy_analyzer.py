@@ -295,6 +295,32 @@ class EconomyAnalyzer:
         region_name = ANALYSIS_REGIONS.get(region[:2], f"지역({region})")
         prev_period = self._get_prev_period(period)
 
+        # DB에 이미 계산된 지표가 있으면 우선 반환 (API 응답 안정성/성능)
+        saved_indicator = await self._load_saved_indicator(region=region, period=period)
+        if saved_indicator is not None:
+            indicator_payload = {
+                "low_price_listing_ratio": saved_indicator.low_price_listing_ratio,
+                "listing_count_change": saved_indicator.listing_count_change,
+                "price_gap_ratio": saved_indicator.price_gap_ratio,
+                "regional_price_index": saved_indicator.regional_price_index,
+                "sale_speed": saved_indicator.sale_speed,
+                "jeonse_ratio": saved_indicator.jeonse_ratio,
+            }
+            return RegionDetail(
+                region_code=saved_indicator.region_code,
+                region_name=saved_indicator.region_name or region_name,
+                period=saved_indicator.period,
+                signal=saved_indicator.signal or "보통",
+                confidence=float(saved_indicator.confidence or 0.0),
+                indicators=IndicatorData(**indicator_payload),
+                analysis_report=(
+                    f"{saved_indicator.region_name} {saved_indicator.period} 분석 결과를 DB에서 조회했습니다. "
+                    f"신호는 {saved_indicator.signal or '보통'}이며 신뢰도는 {float(saved_indicator.confidence or 0.0):.2f}입니다."
+                ),
+                rag_context_count=0,
+                generated_at=datetime.now(),
+            )
+
         logger.info(f"Starting analysis: region={region}, period={period}")
 
         # 데이터 수집 (병렬)
@@ -401,6 +427,63 @@ class EconomyAnalyzer:
 
         logger.info(f"Computing national overview for period={period}")
 
+        # DB 저장 지표가 있으면 우선 집계
+        db_rows = (
+            await self.db.execute(
+                select(EconomyIndicator).where(EconomyIndicator.period == period)
+            )
+        ).scalars().all()
+
+        if db_rows:
+            region_signals: List[RegionSignal] = []
+            all_indicators: List[Dict] = []
+
+            for row in db_rows:
+                indicator_payload = {
+                    "low_price_listing_ratio": row.low_price_listing_ratio,
+                    "listing_count_change": row.listing_count_change,
+                    "price_gap_ratio": row.price_gap_ratio,
+                    "regional_price_index": row.regional_price_index,
+                    "sale_speed": row.sale_speed,
+                    "jeonse_ratio": row.jeonse_ratio,
+                }
+                indicator_data = IndicatorData(**indicator_payload)
+                region_signals.append(
+                    RegionSignal(
+                        region_code=row.region_code,
+                        region_name=row.region_name,
+                        signal=row.signal or "보통",
+                        confidence=float(row.confidence or 0.0),
+                        indicators=indicator_data,
+                    )
+                )
+                all_indicators.append(indicator_data.model_dump())
+
+            boom_count = sum(1 for r in region_signals if r.signal == "호황")
+            normal_count = sum(1 for r in region_signals if r.signal == "보통")
+            recession_count = sum(1 for r in region_signals if r.signal == "침체")
+            national_avg = self._compute_national_avg(all_indicators)
+            summary = self._generate_overview_summary(
+                period=period,
+                boom=boom_count,
+                normal=normal_count,
+                recession=recession_count,
+                total=len(region_signals),
+                national_avg=national_avg,
+            )
+
+            return EconomyOverview(
+                period=period,
+                total_regions=len(region_signals),
+                boom_count=boom_count,
+                normal_count=normal_count,
+                recession_count=recession_count,
+                national_avg_indicators=IndicatorData(**national_avg),
+                regions=region_signals,
+                summary=summary,
+                generated_at=datetime.now(),
+            )
+
         # 주요 지역 병렬 분석 (오류 발생 지역은 스킵)
         region_tasks = [
             self._safe_analyze(region, period)
@@ -454,6 +537,26 @@ class EconomyAnalyzer:
             summary=summary,
             generated_at=datetime.now(),
         )
+
+    async def _load_saved_indicator(
+        self,
+        region: str,
+        period: str,
+    ) -> Optional[EconomyIndicator]:
+        """요청 지역/기간에 대응되는 저장 지표 조회"""
+        query = (
+            select(EconomyIndicator)
+            .where(
+                and_(
+                    EconomyIndicator.period == period,
+                    EconomyIndicator.region_code.startswith(region),
+                )
+            )
+            .order_by(EconomyIndicator.created_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
 
     async def _safe_analyze(
         self, region: str, period: str

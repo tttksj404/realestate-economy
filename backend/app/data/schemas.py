@@ -27,6 +27,15 @@ class ListingResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaginatedListingsResponse(BaseModel):
+    """페이지네이션 매물 응답"""
+
+    page: int
+    size: int
+    total: int
+    items: List[ListingResponse]
+
+
 class TransactionResponse(BaseModel):
     """실거래가 내역 응답"""
 
@@ -42,6 +51,16 @@ class TransactionResponse(BaseModel):
     source: str = Field(description="데이터 출처")
 
     model_config = {"from_attributes": True}
+
+
+class PriceTrendPoint(BaseModel):
+    """기간별 가격 추이 응답"""
+
+    period: str = Field(description="집계 기간 (YYYY-MM)")
+    avg_deal_amount: float = Field(description="평균 실거래가 (만원)")
+    min_deal_amount: float = Field(description="최저 실거래가 (만원)")
+    max_deal_amount: float = Field(description="최고 실거래가 (만원)")
+    transaction_count: int = Field(description="거래 건수")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -133,6 +152,10 @@ class ChatRequest(BaseModel):
         example="11",
     )
     stream: bool = Field(default=True, description="SSE 스트리밍 여부")
+    session_id: Optional[str] = Field(
+        None,
+        description="대화 세션 ID (지정 시 서버가 히스토리를 누적 관리)",
+    )
 
 
 class ChatResponse(BaseModel):

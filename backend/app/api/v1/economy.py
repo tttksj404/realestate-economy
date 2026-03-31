@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.data.schemas import EconomyOverview, RegionDetail
 from app.services.economy_analyzer import EconomyAnalyzer
+from app.services.cache import response_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+CACHE_TTL_SECONDS = 3600
 
 
 @router.get(
@@ -35,12 +37,18 @@ async def get_economy_overview(
     - 지역별 상세 신호 목록 포함
     """
     try:
+        cache_key = f"economy:overview:{period or 'current'}"
+        cached = await response_cache.get(cache_key)
+        if cached:
+            return EconomyOverview.model_validate_json(cached)
+
         analyzer = EconomyAnalyzer(db)
         overview = await analyzer.get_overview(period=period)
+        await response_cache.set(cache_key, overview.model_dump_json(), CACHE_TTL_SECONDS)
         return overview
     except Exception as e:
         logger.error(f"Economy overview fetch failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"경제 현황 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail="경제 현황 조회 중 오류가 발생했습니다.")
 
 
 @router.get(
@@ -68,11 +76,17 @@ async def get_region_economy(
     - 유사 시장 상황 RAG 컨텍스트 참조
     """
     try:
+        cache_key = f"economy:region:{region}:{period or 'current'}"
+        cached = await response_cache.get(cache_key)
+        if cached:
+            return RegionDetail.model_validate_json(cached)
+
         analyzer = EconomyAnalyzer(db)
         detail = await analyzer.analyze(region=region, period=period)
+        await response_cache.set(cache_key, detail.model_dump_json(), CACHE_TTL_SECONDS)
         return detail
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Region economy analysis failed for {region}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"지역 분석 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail="지역 분석 중 오류가 발생했습니다.")

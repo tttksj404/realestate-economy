@@ -34,7 +34,8 @@ accelerate==1.2.1
 bitsandbytes==0.45.0
 
 # Scheduler
-apscheduler==3.11.0
+apscheduler==3.10.4
+rouge-score==0.1.2
 
 # Cache
 redis==5.2.1
@@ -42,3 +43,8 @@ redis==5.2.1
 # Utilities
 python-dotenv==1.0.1
 numpy==1.26.4
+
+# Test
+pytest==8.3.4
+pytest-asyncio==0.25.0
+aiosqlite==0.20.0

@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
-import {
+﻿import {
   getEconomyOverview,
   getRegionDetail,
   getRegionListings,
   getRegionPrices,
   getRegions,
 } from '@/api/client'
+import { useQuery } from '@tanstack/react-query'
 
 export const queryKeys = {
   economyOverview: ['economy', 'overview'] as const,
@@ -37,16 +37,11 @@ export function useRegions() {
   return useQuery({
     queryKey: queryKeys.regions,
     queryFn: getRegions,
-    staleTime: 1000 * 60 * 30, // regions don't change often
+    staleTime: 1000 * 60 * 30,
   })
 }
 
-export function useRegionListings(
-  regionCode: string,
-  page = 1,
-  propertyType?: string,
-  enabled = true
-) {
+export function useRegionListings(regionCode: string, page = 1, propertyType?: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.regionListings(regionCode, page, propertyType),
     queryFn: () => getRegionListings(regionCode, page, propertyType),
@@ -64,3 +59,4 @@ export function useRegionPrices(regionCode: string, enabled = true) {
     staleTime: 1000 * 60 * 10,
   })
 }
+
