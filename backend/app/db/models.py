@@ -6,10 +6,12 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -27,6 +29,11 @@ class RealEstateListing(Base):
     """
 
     __tablename__ = "real_estate_listings"
+    __table_args__ = (
+        Index("ix_listings_region_property", "region_code", "property_type"),
+        Index("ix_listings_region_listed_at", "region_code", "listed_at"),
+        Index("ix_listings_region_listing_price", "region_code", "listing_price"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
@@ -67,6 +74,11 @@ class RealEstateTransaction(Base):
     """
 
     __tablename__ = "real_estate_transactions"
+    __table_args__ = (
+        Index("ix_transactions_region_property", "region_code", "property_type"),
+        Index("ix_transactions_region_deal_date", "region_code", "deal_date"),
+        Index("ix_transactions_region_deal_amount", "region_code", "deal_amount"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
@@ -103,6 +115,10 @@ class EconomyIndicator(Base):
     """
 
     __tablename__ = "economy_indicators"
+    __table_args__ = (
+        UniqueConstraint("region_code", "period", name="uq_economy_region_period"),
+        Index("ix_economy_region_period", "region_code", "period"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 

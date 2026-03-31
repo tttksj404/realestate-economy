@@ -1,5 +1,4 @@
-import axios from 'axios'
-import type {
+﻿import type {
   EconomyOverview,
   RegionDetail,
   ListingsResponse,
@@ -8,8 +7,8 @@ import type {
   ChatRequest,
   TokenEvent,
 } from '@/types'
+import axios from 'axios'
 
-// Axios instance
 export const apiClient = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -18,28 +17,23 @@ export const apiClient = axios.create({
   },
 })
 
-// Error interceptor
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response) {
-      const status = error.response.status
-      const message = error.response.data?.detail || error.response.data?.message || '서버 오류가 발생했습니다.'
-      if (status === 404) {
-        console.error(`[API 404] ${error.config?.url}: ${message}`)
-      } else if (status >= 500) {
-        console.error(`[API ${status}] 서버 오류: ${message}`)
-      } else {
-        console.error(`[API ${status}] ${message}`)
-      }
+      const status = error.response.status as number
+      const message =
+        (error.response.data?.detail as string | undefined) ??
+        (error.response.data?.message as string | undefined) ??
+        '요청을 처리하는 중 오류가 발생했습니다.'
+      console.error(`[API ${status}] ${message}`)
     } else if (error.request) {
-      console.error('[API] 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인하세요.')
+      console.error('[API] 서버에 연결할 수 없습니다. 백엔드 실행 상태를 확인하세요.')
     }
     return Promise.reject(error)
   }
 )
 
-// API functions
 export async function getEconomyOverview(): Promise<EconomyOverview> {
   const { data } = await apiClient.get<EconomyOverview>('/economy/overview')
   return data
@@ -61,7 +55,10 @@ export async function getRegionListings(
   propertyType?: string
 ): Promise<ListingsResponse> {
   const params: Record<string, string | number> = { page }
-  if (propertyType) params.type = propertyType
+  if (propertyType) {
+    params.type = propertyType
+  }
+
   const { data } = await apiClient.get<ListingsResponse>(`/regions/${regionCode}/listings`, { params })
   return data
 }
@@ -71,7 +68,6 @@ export async function getRegionPrices(regionCode: string): Promise<PricesRespons
   return data
 }
 
-// SSE chat streaming using fetch + ReadableStream
 export async function streamChat(
   request: ChatRequest,
   onToken: (token: TokenEvent) => void,
@@ -102,7 +98,9 @@ export async function streamChat(
 
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -110,31 +108,27 @@ export async function streamChat(
 
       for (const line of lines) {
         const trimmed = line.trim()
-        if (!trimmed) continue
-
-        if (trimmed.startsWith('event:')) {
-          // event type line — skip, handled by next data line
+        if (!trimmed.startsWith('data:')) {
           continue
         }
 
-        if (trimmed.startsWith('data:')) {
-          const jsonStr = trimmed.slice(5).trim()
-          if (jsonStr === '[DONE]') {
-            onDone()
-            return
-          }
-          try {
-            const parsed = JSON.parse(jsonStr) as TokenEvent
-            onToken(parsed)
-          } catch {
-            // ignore non-JSON lines
-          }
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') {
+          onDone()
+          return
+        }
+
+        try {
+          onToken(JSON.parse(payload) as TokenEvent)
+        } catch {
+          // Ignore malformed lines.
         }
       }
     }
 
     onDone()
-  } catch (err) {
-    onError(err instanceof Error ? err : new Error(String(err)))
+  } catch (error) {
+    onError(error instanceof Error ? error : new Error(String(error)))
   }
 }
+

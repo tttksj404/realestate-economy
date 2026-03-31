@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { ChevronLeft, ChevronRight, ArrowUpDown } from 'lucide-react'
-import type { Listing } from '@/types'
+﻿import type { Listing } from '@/types'
+import { ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useMemo, useState } from 'react'
 
 interface ListingTableProps {
   listings: Listing[]
@@ -13,28 +13,27 @@ interface ListingTableProps {
 }
 
 type SortKey = 'price' | 'area' | 'listed_at'
-type SortDir = 'asc' | 'desc'
+type SortDirection = 'asc' | 'desc'
+
+const PROPERTY_TYPES = ['전체', '아파트', '빌라', '오피스텔', '단독주택', '상가'] as const
 
 function formatPrice(price: number): string {
   if (price >= 10000) {
-    const uk = Math.floor(price / 10000)
+    const eok = Math.floor(price / 10000)
     const man = price % 10000
-    return man > 0 ? `${uk}억 ${man.toLocaleString()}만` : `${uk}억`
+    return man > 0 ? `${eok}억 ${man.toLocaleString()}만` : `${eok}억`
   }
   return `${price.toLocaleString()}만`
 }
 
 function formatArea(area: number): string {
   const pyeong = (area / 3.305785).toFixed(1)
-  return `${area}㎡ (${pyeong}평)`
+  return `${area.toFixed(1)}㎡ (${pyeong}평)`
 }
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr)
-  return d.toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' })
+function formatDate(isoDate: string): string {
+  return new Date(isoDate).toLocaleDateString('ko-KR')
 }
-
-const PROPERTY_TYPES = ['전체', '아파트', '빌라', '오피스텔', '단독주택', '상가'] as const
 
 export default function ListingTable({
   listings,
@@ -46,137 +45,108 @@ export default function ListingTable({
   isLoading,
 }: ListingTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('listed_at')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   const perPage = 10
-  const totalPages = Math.ceil(total / perPage)
+  const totalPages = Math.max(1, Math.ceil(total / perPage))
 
-  const sorted = [...listings].sort((a, b) => {
-    let comparison = 0
-    if (sortKey === 'price') comparison = a.price - b.price
-    else if (sortKey === 'area') comparison = a.area - b.area
-    else if (sortKey === 'listed_at')
-      comparison = new Date(a.listed_at).getTime() - new Date(b.listed_at).getTime()
-    return sortDir === 'asc' ? comparison : -comparison
-  })
+  const sortedListings = useMemo(() => {
+    return [...listings].sort((a, b) => {
+      const result =
+        sortKey === 'price'
+          ? a.price - b.price
+          : sortKey === 'area'
+          ? a.area - b.area
+          : new Date(a.listed_at).getTime() - new Date(b.listed_at).getTime()
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortKey(key)
-      setSortDir('desc')
+      return sortDirection === 'asc' ? result : -result
+    })
+  }, [listings, sortDirection, sortKey])
+
+  function toggleSort(nextKey: SortKey) {
+    if (sortKey === nextKey) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
     }
-  }
 
-  const typeColors: Record<string, string> = {
-    아파트: 'bg-blue-900/50 text-blue-300 border-blue-700/50',
-    빌라: 'bg-purple-900/50 text-purple-300 border-purple-700/50',
-    오피스텔: 'bg-cyan-900/50 text-cyan-300 border-cyan-700/50',
-    단독주택: 'bg-orange-900/50 text-orange-300 border-orange-700/50',
-    상가: 'bg-pink-900/50 text-pink-300 border-pink-700/50',
+    setSortKey(nextKey)
+    setSortDirection('desc')
   }
 
   return (
-    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/60 overflow-hidden">
-      {/* Header + Filters */}
-      <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
-        <h3 className="text-sm font-semibold text-slate-200">
-          최근 매물 <span className="text-slate-500 font-normal">({total.toLocaleString()}건)</span>
-        </h3>
-        <div className="flex gap-1.5">
-          {PROPERTY_TYPES.map((t) => {
-            const value = t === '전체' ? undefined : t
-            const active = (t === '전체' && !selectedType) || selectedType === t
+    <div className="overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/60">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/50 p-4">
+        <h3 className="text-sm font-semibold text-slate-200">매물 목록 ({total.toLocaleString()}건)</h3>
+        <div className="flex flex-wrap gap-1.5">
+          {PROPERTY_TYPES.map((type) => {
+            const value = type === '전체' ? undefined : type
+            const active = (type === '전체' && !selectedType) || selectedType === type
             return (
               <button
-                key={t}
+                key={type}
                 onClick={() => onTypeFilter?.(value)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-full px-3 py-1 text-xs ${
                   active
                     ? 'bg-blue-600 text-white'
-                    : 'bg-slate-700/60 text-slate-400 hover:bg-slate-600/60 hover:text-slate-300'
+                    : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600/60'
                 }`}
               >
-                {t}
+                {type}
               </button>
             )
           })}
         </div>
       </div>
 
-      {/* Table */}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-700/50 bg-slate-800/80">
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">유형</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">주소</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">
-                <button
-                  onClick={() => toggleSort('price')}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors"
-                >
-                  가격 <ArrowUpDown size={11} />
+        <table className="w-full min-w-[760px] text-sm">
+          <thead className="bg-slate-900/50 text-slate-400">
+            <tr>
+              <th className="px-4 py-3 text-left">유형</th>
+              <th className="px-4 py-3 text-left">주소</th>
+              <th className="px-4 py-3 text-left">
+                <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1">
+                  가격 <ArrowUpDown size={12} />
                 </button>
               </th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">
-                <button
-                  onClick={() => toggleSort('area')}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors"
-                >
-                  면적 <ArrowUpDown size={11} />
+              <th className="px-4 py-3 text-left">
+                <button onClick={() => toggleSort('area')} className="inline-flex items-center gap-1">
+                  면적 <ArrowUpDown size={12} />
                 </button>
               </th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">층</th>
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">
-                <button
-                  onClick={() => toggleSort('listed_at')}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors"
-                >
-                  등록일 <ArrowUpDown size={11} />
+              <th className="px-4 py-3 text-left">층</th>
+              <th className="px-4 py-3 text-left">
+                <button onClick={() => toggleSort('listed_at')} className="inline-flex items-center gap-1">
+                  등록일 <ArrowUpDown size={12} />
                 </button>
               </th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i} className="border-b border-slate-700/30">
-                  {Array.from({ length: 6 }).map((_, j) => (
-                    <td key={j} className="px-4 py-3">
-                      <div className="h-3 rounded bg-slate-700/60 animate-pulse" style={{ width: `${60 + j * 8}%` }} />
+              Array.from({ length: 6 }).map((_, row) => (
+                <tr key={`loading-${row}`} className="border-t border-slate-700/40">
+                  {Array.from({ length: 6 }).map((__, col) => (
+                    <td key={`loading-${row}-${col}`} className="px-4 py-3">
+                      <div className="h-3 animate-pulse rounded bg-slate-700/60" />
                     </td>
                   ))}
                 </tr>
               ))
-            ) : sorted.length === 0 ? (
+            ) : sortedListings.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-12 text-center text-sm text-slate-500">
-                  매물이 없습니다.
+                <td colSpan={6} className="py-10 text-center text-slate-500">
+                  조건에 맞는 매물이 없습니다.
                 </td>
               </tr>
             ) : (
-              sorted.map((listing) => (
-                <tr
-                  key={listing.id}
-                  className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors"
-                >
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
-                        typeColors[listing.type] ?? 'bg-slate-700/50 text-slate-300 border-slate-600/50'
-                      }`}
-                    >
-                      {listing.type}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-300 max-w-[180px] truncate">
+              sortedListings.map((listing) => (
+                <tr key={listing.id} className="border-t border-slate-700/40">
+                  <td className="px-4 py-3 text-slate-200">{listing.type}</td>
+                  <td className="max-w-[240px] truncate px-4 py-3 text-slate-300">
                     {listing.address ?? listing.district ?? listing.region}
                   </td>
-                  <td className="px-4 py-3 font-semibold text-slate-100">
-                    {formatPrice(listing.price)}
-                  </td>
+                  <td className="px-4 py-3 font-semibold text-slate-100">{formatPrice(listing.price)}</td>
                   <td className="px-4 py-3 text-slate-300">{formatArea(listing.area)}</td>
                   <td className="px-4 py-3 text-slate-400">
                     {listing.floor != null
@@ -191,43 +161,28 @@ export default function ListingTable({
         </table>
       </div>
 
-      {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
-          <span className="text-xs text-slate-500">
-            {(page - 1) * perPage + 1}–{Math.min(page * perPage, total)} / {total}건
+        <div className="flex items-center justify-between border-t border-slate-700/50 px-4 py-3 text-xs text-slate-400">
+          <span>
+            {(page - 1) * perPage + 1}-{Math.min(page * perPage, total)} / {total}
           </span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => onPageChange(page - 1)}
               disabled={page <= 1}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-700/60 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="rounded p-1 hover:bg-slate-700/60 disabled:opacity-40"
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={14} />
             </button>
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              const start = Math.max(1, Math.min(page - 2, totalPages - 4))
-              const pageNum = start + i
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => onPageChange(pageNum)}
-                  className={`min-w-[28px] rounded-lg py-1 text-xs font-medium transition-colors ${
-                    page === pageNum
-                      ? 'bg-blue-600 text-white'
-                      : 'text-slate-400 hover:bg-slate-700/60 hover:text-slate-200'
-                  }`}
-                >
-                  {pageNum}
-                </button>
-              )
-            })}
+            <span className="px-2">
+              {page}/{totalPages}
+            </span>
             <button
               onClick={() => onPageChange(page + 1)}
               disabled={page >= totalPages}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-700/60 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="rounded p-1 hover:bg-slate-700/60 disabled:opacity-40"
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={14} />
             </button>
           </div>
         </div>
@@ -235,3 +190,4 @@ export default function ListingTable({
     </div>
   )
 }
+

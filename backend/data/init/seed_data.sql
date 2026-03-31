@@ -1,0 +1,3 @@
+-- Optional seed script executed by postgres on first init.
+-- Keep this file idempotent and lightweight.
+-- Add INSERT statements here if initial demo data is needed.
