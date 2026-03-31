@@ -1,0 +1,44 @@
+# Web Framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic-settings==2.6.1
+python-multipart==0.0.12
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# HTTP Client
+httpx==0.28.0
+
+# HTML Parsing (크롤링용)
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Vector Store
+chromadb==0.5.20
+
+# Embedding & ML
+sentence-transformers==3.3.1
+transformers==4.47.1
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# Fine-tuning
+peft==0.14.0
+trl==0.12.2
+datasets==3.2.0
+accelerate==1.2.1
+bitsandbytes==0.45.0
+
+# Scheduler
+apscheduler==3.11.0
+
+# Cache
+redis==5.2.1
+
+# Utilities
+python-dotenv==1.0.1
+numpy==1.26.4
