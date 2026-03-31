@@ -18,7 +18,13 @@ class Settings(BaseSettings):
     CHROMADB_HOST: str = ""
     CHROMADB_PORT: int = 8000
 
-    PUBLIC_DATA_API_KEY: str = ""
+    # 국토부 실거래가 API 키 (유형별 별도 인증키)
+    PUBLIC_DATA_API_KEY_APT: str = ""        # 아파트 매매
+    PUBLIC_DATA_API_KEY_SMALL: str = ""      # 단독/다가구
+    PUBLIC_DATA_API_KEY_TOGETHER: str = ""   # 연립다세대
+    PUBLIC_DATA_API_KEY_OFFICE: str = ""     # 오피스텔
+
+    # 온비드 공매 API
     ONBID_API_KEY: str = ""
 
     LLM_MODEL_PATH: str = "beomi/Llama-3-Open-Ko-8B"
