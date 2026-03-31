@@ -25,7 +25,7 @@ class RealEstateListing(Base):
     """
     부동산 매물 현황 테이블
 
-    공공API 및 네이버 부동산 크롤링을 통해 수집된 현재 매물 정보
+    공공API 및 온비드 공매 데이터를 통해 수집된 현재 매물 정보
     """
 
     __tablename__ = "real_estate_listings"
@@ -57,7 +57,7 @@ class RealEstateListing(Base):
     # 매물 등록일
     listed_at: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
 
-    # 데이터 출처: 공공API / 네이버
+    # 데이터 출처: 공공API / 온비드
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="공공API")
 
     # 메타

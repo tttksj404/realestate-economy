@@ -28,7 +28,7 @@
 
 ### Data Pipeline (`backend/app/data/`)
 - `collectors/public_api.py` — 국토부 공공데이터포털 API (실거래가)
-- `collectors/naver_crawler.py` — 네이버 부동산 매물 크롤링
+- `collectors/onbid_api.py` — 온비드(캠코) 공매 물건 API
 - `processors/cleaner.py` — 데이터 정제, 이상치 제거
 - `processors/feature_engineer.py` — 6개 경제 지표 계산
 - `processors/embedder.py` — sentence-transformers 임베딩
@@ -62,7 +62,7 @@
 ## Data Models (DB)
 
 ### RealEstateListing
-매물 정보: region_code, property_type(아파트/빌라/오피스텔), listing_price, actual_price, jeonse_price, area_sqm, source(공공API/네이버)
+매물 정보: region_code, property_type(아파트/빌라/오피스텔), listing_price, actual_price, jeonse_price, area_sqm, source(공공API/온비드)
 
 ### RealEstateTransaction
 실거래 정보: region_code, property_type, deal_amount, area_sqm, deal_date
@@ -114,7 +114,7 @@ docker-compose up --build
 
 See `.env.example` for all required variables. Key ones:
 - `PUBLIC_DATA_API_KEY` — 공공데이터포털 API 인증키
-- `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` — 네이버 API
+- `ONBID_API_KEY` — 온비드(캠코) 공매 API
 - `DATABASE_URL` — PostgreSQL connection string
 - `LLM_MODEL_PATH` — 파인튜닝된 모델 경로
 

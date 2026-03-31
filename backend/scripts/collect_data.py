@@ -2,7 +2,7 @@
 """
 부동산 데이터 수집 스크립트
 
-공공데이터포털(국토부 실거래가 API) 및 네이버 부동산 크롤러를 통해
+공공데이터포털(국토부 실거래가 API) 및 온비드(캠코 공매 물건 API)를 통해
 주요 지역 매물·거래 데이터를 수집하여 PostgreSQL에 저장합니다.
 
 사용 예시:
@@ -12,8 +12,8 @@
     # 서울·경기만, 공공API만
     python scripts/collect_data.py --regions 서울 경기 --source public
 
-    # 특정 지역 네이버 크롤링만
-    python scripts/collect_data.py --regions 부산 대구 --source naver --months 1
+    # 특정 지역 온비드만
+    python scripts/collect_data.py --regions 부산 대구 --source onbid --months 1
 """
 
 import argparse
@@ -32,7 +32,7 @@ sys.path.insert(0, str(_BACKEND_DIR))
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
-from app.data.collectors import naver_crawler, public_api
+from app.data.collectors import public_api, onbid_api
 from app.db.models import RealEstateListing, RealEstateTransaction
 
 # ---------------------------------------------------------------------------
@@ -73,19 +73,10 @@ DEFAULT_REGIONS = ["서울", "경기", "인천", "부산", "대구", "대전", "
 
 
 def build_year_months(months_back: int) -> List[str]:
-    """
-    현재 날짜로부터 N개월 이전까지의 연월 목록을 반환합니다.
-
-    Args:
-        months_back: 몇 개월 이전까지 수집할지
-
-    Returns:
-        ['202401', '202402', ...] 형식의 연월 리스트 (오래된 순)
-    """
+    """현재 날짜로부터 N개월 이전까지의 연월 목록을 반환합니다."""
     today = date.today()
     result = []
     for i in range(months_back, 0, -1):
-        # 현재 월에서 i개월 빼기
         year = today.year
         month = today.month - i
         while month <= 0:
@@ -101,18 +92,7 @@ async def collect_public_api(
     region_name: str,
     year_months: List[str],
 ) -> Dict[str, int]:
-    """
-    공공API(국토부 실거래가)에서 거래 데이터를 수집하여 DB에 저장합니다.
-
-    Args:
-        db_session: 비동기 DB 세션
-        region_code: 시도 코드 (예: "11")
-        region_name: 지역명 (예: "서울특별시")
-        year_months: 수집할 연월 목록
-
-    Returns:
-        {"apartment": N, "villa": N, "officetel": N} 저장 건수
-    """
+    """공공API(국토부 실거래가)에서 거래 데이터를 수집하여 DB에 저장합니다."""
     saved_counts = {"apartment": 0, "villa": 0, "officetel": 0}
 
     for ym in year_months:
@@ -121,7 +101,6 @@ async def collect_public_api(
         logger.info(f"[공공API] {region_name} {ym} 수집 중...")
 
         try:
-            # 아파트 실거래가 수집
             apt_trades = await public_api.fetch_apartment_trades(
                 region_code=region_code, year=year, month=month
             )
@@ -139,13 +118,10 @@ async def collect_public_api(
                 )
                 db_session.add(obj)
             saved_counts["apartment"] += len(apt_trades)
-            logger.debug(f"  아파트: {len(apt_trades)}건")
-
         except Exception as e:
             logger.warning(f"[공공API] {region_name} {ym} 아파트 수집 실패: {e}")
 
         try:
-            # 연립다세대 실거래가 수집
             villa_trades = await public_api.fetch_villa_trades(
                 region_code=region_code, year=year, month=month
             )
@@ -163,13 +139,10 @@ async def collect_public_api(
                 )
                 db_session.add(obj)
             saved_counts["villa"] += len(villa_trades)
-            logger.debug(f"  빌라: {len(villa_trades)}건")
-
         except Exception as e:
             logger.warning(f"[공공API] {region_name} {ym} 빌라 수집 실패: {e}")
 
         try:
-            # 오피스텔 실거래가 수집
             offi_trades = await public_api.fetch_officetel_trades(
                 region_code=region_code, year=year, month=month
             )
@@ -187,85 +160,59 @@ async def collect_public_api(
                 )
                 db_session.add(obj)
             saved_counts["officetel"] += len(offi_trades)
-            logger.debug(f"  오피스텔: {len(offi_trades)}건")
-
         except Exception as e:
             logger.warning(f"[공공API] {region_name} {ym} 오피스텔 수집 실패: {e}")
 
-        # 연월별 중간 커밋 (롤백 범위 최소화)
         await db_session.flush()
 
     return saved_counts
 
 
-async def collect_naver(
+async def collect_onbid(
     db_session: AsyncSession,
     region_code: str,
     region_name: str,
+    year_months: List[str],
 ) -> Dict[str, int]:
     """
-    네이버 부동산 크롤러에서 현재 매물 데이터를 수집하여 DB에 저장합니다.
-
-    Args:
-        db_session: 비동기 DB 세션
-        region_code: 시도 코드
-        region_name: 지역명
-
-    Returns:
-        {"매매": N, "전세": N} 저장 건수
+    온비드 공매 물건 데이터를 수집하여 DB에 저장합니다.
+    공매 물건 = 경기 침체 시그널 (부실채권/경매 증가)
     """
-    saved_counts = {"매매": 0, "전세": 0}
+    saved_counts = {"공매": 0}
     today = date.today()
 
-    logger.info(f"[네이버] {region_name} 매물 수집 중...")
+    # 수집 기간 계산
+    start_date = year_months[0] + "01" if year_months else None
+    end_date = today.strftime("%Y%m%d")
 
-    # 매매 매물 수집
+    logger.info(f"[온비드] {region_name} 공매 물건 수집 중...")
+
     try:
-        listings = await naver_crawler.fetch_listings(region_code=region_code)
-        for item in listings:
+        items = await onbid_api.fetch_all_onbid_properties(
+            regions=[region_code],
+            start_date=start_date,
+            end_date=end_date,
+        )
+        for item in items:
             obj = RealEstateListing(
                 region_code=region_code,
                 region_name=region_name,
-                property_type=item.get("property_type", "아파트"),
-                listing_price=item.get("listing_price"),
-                actual_price=item.get("actual_price"),
+                property_type=item.get("property_type", "기타"),
+                listing_price=item.get("min_bid_price"),
+                actual_price=item.get("appraisal_price"),
                 jeonse_price=None,
                 area_sqm=item.get("area_sqm"),
-                floor=item.get("floor"),
-                built_year=item.get("built_year"),
-                listed_at=item.get("listed_at", today),
-                source="네이버",
+                floor=None,
+                built_year=None,
+                listed_at=today,
+                source="온비드",
             )
             db_session.add(obj)
-        saved_counts["매매"] += len(listings)
-        logger.debug(f"  매매 매물: {len(listings)}건")
+        saved_counts["공매"] = len(items)
+        logger.info(f"  [온비드] {region_name} — 공매 {len(items)}건 수집")
 
     except Exception as e:
-        logger.warning(f"[네이버] {region_name} 매매 매물 수집 실패: {e}")
-
-    # 전세 매물 수집
-    try:
-        jeonse_listings = await naver_crawler.fetch_jeonse_listings(region_code=region_code)
-        for item in jeonse_listings:
-            obj = RealEstateListing(
-                region_code=region_code,
-                region_name=region_name,
-                property_type=item.get("property_type", "아파트"),
-                listing_price=None,
-                actual_price=None,
-                jeonse_price=item.get("jeonse_price"),
-                area_sqm=item.get("area_sqm"),
-                floor=item.get("floor"),
-                built_year=item.get("built_year"),
-                listed_at=item.get("listed_at", today),
-                source="네이버",
-            )
-            db_session.add(obj)
-        saved_counts["전세"] += len(jeonse_listings)
-        logger.debug(f"  전세 매물: {len(jeonse_listings)}건")
-
-    except Exception as e:
-        logger.warning(f"[네이버] {region_name} 전세 매물 수집 실패: {e}")
+        logger.warning(f"[온비드] {region_name} 공매 수집 실패: {e}")
 
     await db_session.flush()
     return saved_counts
@@ -280,11 +227,10 @@ async def main(
     메인 데이터 수집 루틴
 
     Args:
-        regions: 수집 대상 지역명 리스트 (예: ["서울", "경기"])
-        months: 몇 개월 이전 데이터까지 수집할지 (공공API)
-        source: 수집 소스 ("public" | "naver" | "all")
+        regions: 수집 대상 지역명 리스트
+        months: 몇 개월 이전 데이터까지 수집할지
+        source: "public" | "onbid" | "all"
     """
-    # 지역 코드 매핑 검증
     region_pairs: List[Tuple[str, str]] = []
     for region in regions:
         if region not in REGION_CODE_MAP:
@@ -295,14 +241,12 @@ async def main(
             sys.exit(1)
         region_pairs.append(REGION_CODE_MAP[region])
 
-    # 수집 대상 연월 목록 생성
     year_months = build_year_months(months)
     logger.info(
         f"수집 시작 — 지역: {regions}, 소스: {source}, "
         f"기간: {year_months[0]}~{year_months[-1]} ({len(year_months)}개월)"
     )
 
-    # DB 엔진 / 세션 팩토리 생성
     engine = create_async_engine(
         settings.DATABASE_URL,
         echo=False,
@@ -337,29 +281,24 @@ async def main(
                 except Exception as e:
                     logger.error(f"  [공공API] {region_name} 수집 오류: {e}")
 
-            # 네이버 수집
-            if source in ("naver", "all"):
+            # 온비드 수집
+            if source in ("onbid", "all"):
                 try:
-                    counts = await collect_naver(session, region_code, region_name)
-                    region_stats.update({f"네이버__{k}": v for k, v in counts.items()})
-                    logger.info(
-                        f"  [네이버] {region_name} — "
-                        f"매매 {counts['매매']}, 전세 {counts['전세']}건 수집"
+                    counts = await collect_onbid(
+                        session, region_code, region_name, year_months
                     )
+                    region_stats.update({f"온비드__{k}": v for k, v in counts.items()})
                 except Exception as e:
-                    logger.error(f"  [네이버] {region_name} 수집 오류: {e}")
+                    logger.error(f"  [온비드] {region_name} 수집 오류: {e}")
 
-            # 지역별 통계 누적
             for k, v in region_stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
-        # 전체 커밋
         await session.commit()
         logger.info("DB 커밋 완료")
 
     await engine.dispose()
 
-    # 수집 결과 요약
     elapsed = (datetime.now() - start_time).total_seconds()
     logger.info("=" * 60)
     logger.info("데이터 수집 완료")
@@ -373,13 +312,13 @@ async def main(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="부동산 데이터 수집기 — 공공API/네이버 데이터를 PostgreSQL에 저장",
+        description="부동산 데이터 수집기 — 공공API/온비드 데이터를 PostgreSQL에 저장",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 예시:
   python scripts/collect_data.py
   python scripts/collect_data.py --regions 서울 경기 --months 6
-  python scripts/collect_data.py --source naver --regions 부산
+  python scripts/collect_data.py --source onbid --regions 부산
   python scripts/collect_data.py --source public --months 12
         """,
     )
@@ -394,13 +333,13 @@ def parse_args() -> argparse.Namespace:
         "--months",
         type=int,
         default=3,
-        help="몇 개월 이전 데이터까지 수집할지 (기본값: 3, 공공API 전용)",
+        help="몇 개월 이전 데이터까지 수집할지 (기본값: 3)",
     )
     parser.add_argument(
         "--source",
-        choices=["public", "naver", "all"],
+        choices=["public", "onbid", "all"],
         default="all",
-        help="데이터 소스 선택: public(공공API) / naver(네이버) / all(모두, 기본값)",
+        help="데이터 소스 선택: public(국토부) / onbid(온비드 공매) / all(모두, 기본값)",
     )
     parser.add_argument(
         "--log-level",
@@ -413,10 +352,7 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-
-    # 로그 레벨 적용
     logging.getLogger().setLevel(getattr(logging, args.log_level))
-
     asyncio.run(
         main(
             regions=args.regions,
