@@ -93,7 +93,7 @@ async def collect_public_api(
     year_months: List[str],
 ) -> Dict[str, int]:
     """공공API(국토부 실거래가)에서 거래 데이터를 수집하여 DB에 저장합니다."""
-    saved_counts = {"apartment": 0, "villa": 0, "officetel": 0}
+    saved_counts = {"apartment": 0, "detached": 0, "villa": 0, "officetel": 0}
 
     for ym in year_months:
         year = int(ym[:4])
@@ -120,6 +120,27 @@ async def collect_public_api(
             saved_counts["apartment"] += len(apt_trades)
         except Exception as e:
             logger.warning(f"[공공API] {region_name} {ym} 아파트 수집 실패: {e}")
+
+        try:
+            detached_trades = await public_api.fetch_detached_trades(
+                region_code=region_code, year=year, month=month
+            )
+            for trade in detached_trades:
+                obj = RealEstateTransaction(
+                    region_code=region_code,
+                    region_name=region_name,
+                    property_type="단독다가구",
+                    deal_amount=trade.get("deal_amount", 0),
+                    area_sqm=trade.get("area_sqm"),
+                    deal_date=trade.get("deal_date"),
+                    floor=trade.get("floor"),
+                    built_year=trade.get("built_year"),
+                    source="공공API",
+                )
+                db_session.add(obj)
+            saved_counts["detached"] += len(detached_trades)
+        except Exception as e:
+            logger.warning(f"[공공API] {region_name} {ym} 단독다가구 수집 실패: {e}")
 
         try:
             villa_trades = await public_api.fetch_villa_trades(
@@ -275,8 +296,8 @@ async def main(
                     region_stats.update({f"공공__{k}": v for k, v in counts.items()})
                     logger.info(
                         f"  [공공API] {region_name} — "
-                        f"아파트 {counts['apartment']}, 빌라 {counts['villa']}, "
-                        f"오피스텔 {counts['officetel']}건 수집"
+                        f"아파트 {counts['apartment']}, 단독다가구 {counts['detached']}, "
+                        f"빌라 {counts['villa']}, 오피스텔 {counts['officetel']}건 수집"
                     )
                 except Exception as e:
                     logger.error(f"  [공공API] {region_name} 수집 오류: {e}")

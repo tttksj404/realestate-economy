@@ -1,10 +1,11 @@
 """
 공공데이터포털 국토교통부 실거래가 API 수집기
 
-API 문서:
-- 아파트 매매 실거래가: https://www.data.go.kr/data/15058747/openapi.do
-- 연립다세대 매매: https://www.data.go.kr/data/15058038/openapi.do
-- 오피스텔 매매: https://www.data.go.kr/data/15058452/openapi.do
+API 문서 (유형별 별도 인증키 사용):
+- 아파트 매매 실거래가 (apt): https://www.data.go.kr/data/15058747/openapi.do
+- 단독/다가구 매매 (small): https://www.data.go.kr/data/15058022/openapi.do
+- 연립다세대 매매 (together): https://www.data.go.kr/data/15058038/openapi.do
+- 오피스텔 매매 (office): https://www.data.go.kr/data/15058452/openapi.do
 """
 
 import logging
@@ -20,10 +21,11 @@ logger = logging.getLogger(__name__)
 # 공공데이터포털 베이스 URL
 BASE_URL = "https://apis.data.go.kr/1613000"
 
-# API 엔드포인트
-APARTMENT_TRADE_URL = f"{BASE_URL}/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
-VILLA_TRADE_URL = f"{BASE_URL}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"
-OFFICETEL_TRADE_URL = f"{BASE_URL}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
+# API 엔드포인트 (유형별)
+APARTMENT_TRADE_URL = f"{BASE_URL}/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"         # 아파트 (apt)
+DETACHED_TRADE_URL = f"{BASE_URL}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade"            # 단독/다가구 (small)
+VILLA_TRADE_URL = f"{BASE_URL}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"               # 연립다세대 (together)
+OFFICETEL_TRADE_URL = f"{BASE_URL}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"       # 오피스텔 (office)
 
 # 한 번에 가져올 최대 건수
 DEFAULT_NUM_OF_ROWS = 1000
@@ -116,7 +118,7 @@ async def fetch_apartment_trades(
         }
     """
     params = {
-        "serviceKey": settings.PUBLIC_DATA_API_KEY,
+        "serviceKey": settings.PUBLIC_DATA_API_KEY_APT,
         "LAWD_CD": region_code,
         "DEAL_YMD": year_month,
         "numOfRows": DEFAULT_NUM_OF_ROWS,
@@ -182,7 +184,7 @@ async def fetch_villa_trades(
         거래 내역 리스트 (아파트와 동일 구조, property_type="빌라")
     """
     params = {
-        "serviceKey": settings.PUBLIC_DATA_API_KEY,
+        "serviceKey": settings.PUBLIC_DATA_API_KEY_TOGETHER,
         "LAWD_CD": region_code,
         "DEAL_YMD": year_month,
         "numOfRows": DEFAULT_NUM_OF_ROWS,
@@ -230,6 +232,71 @@ async def fetch_villa_trades(
     return result
 
 
+async def fetch_detached_trades(
+    region_code: str,
+    year_month: str,
+    page_no: int = 1,
+) -> List[Dict[str, Any]]:
+    """
+    국토부 단독/다가구 매매 실거래가 조회
+
+    Args:
+        region_code: 법정동 시군구코드 (5자리)
+        year_month: 조회 연월 (YYYYMM)
+        page_no: 페이지 번호
+
+    Returns:
+        거래 내역 리스트 (property_type="단독다가구")
+    """
+    params = {
+        "serviceKey": settings.PUBLIC_DATA_API_KEY_SMALL,
+        "LAWD_CD": region_code,
+        "DEAL_YMD": year_month,
+        "numOfRows": DEFAULT_NUM_OF_ROWS,
+        "pageNo": page_no,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.get(DETACHED_TRADE_URL, params=params)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Detached trade API HTTP error: {e.response.status_code}")
+            return []
+        except httpx.RequestError as e:
+            logger.error(f"Detached trade API request error: {e}")
+            return []
+
+    raw_items = _parse_xml_response(resp.text)
+    result = []
+
+    for item in raw_items:
+        year = item.get("년", "")
+        month = str(item.get("월", "")).zfill(2)
+        day = str(item.get("일", "")).zfill(2)
+        deal_date = f"{year}-{month}-{day}" if year else None
+
+        result.append(
+            {
+                "deal_amount": _safe_float(item.get("거래금액")),
+                "area_sqm": _safe_float(item.get("대지면적") or item.get("연면적")),
+                "deal_date": deal_date,
+                "floor": None,  # 단독주택은 층 정보 없음
+                "built_year": _safe_int(item.get("건축년도")),
+                "building_name": item.get("주택유형"),
+                "region_code": region_code,
+                "dong_name": item.get("법정동"),
+                "property_type": "단독다가구",
+                "source": "공공API",
+            }
+        )
+
+    logger.info(
+        f"Fetched {len(result)} detached trades for region={region_code}, period={year_month}"
+    )
+    return result
+
+
 async def fetch_officetel_trades(
     region_code: str,
     year_month: str,
@@ -247,7 +314,7 @@ async def fetch_officetel_trades(
         거래 내역 리스트 (property_type="오피스텔")
     """
     params = {
-        "serviceKey": settings.PUBLIC_DATA_API_KEY,
+        "serviceKey": settings.PUBLIC_DATA_API_KEY_OFFICE,
         "LAWD_CD": region_code,
         "DEAL_YMD": year_month,
         "numOfRows": DEFAULT_NUM_OF_ROWS,
@@ -306,13 +373,14 @@ async def fetch_all_trades(
     """
     import asyncio
 
-    apt, villa, officetel = await asyncio.gather(
+    apt, detached, villa, officetel = await asyncio.gather(
         fetch_apartment_trades(region_code, year_month),
+        fetch_detached_trades(region_code, year_month),
         fetch_villa_trades(region_code, year_month),
         fetch_officetel_trades(region_code, year_month),
     )
 
-    all_trades = apt + villa + officetel
+    all_trades = apt + detached + villa + officetel
     logger.info(
         f"Total {len(all_trades)} trades fetched for region={region_code}, period={year_month}"
     )
