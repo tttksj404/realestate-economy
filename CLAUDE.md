@@ -21,6 +21,18 @@ bash setup.sh
 
 이것만 하면 Python venv + Node modules + Docker 인프라 + DB 마이그레이션까지 완료.
 
+### Claude Code 메모리 동기화 (선택)
+
+```powershell
+# Windows — 메모리가 iCloud를 통해 PC 간 공유됨
+powershell -ExecutionPolicy Bypass -File setup-claude-memory.ps1
+```
+
+```bash
+# Mac
+bash setup-claude-memory.sh
+```
+
 ## iCloud로 동기화되는 것 / 안 되는 것
 
 ### 동기화됨 (코드 + 설정)
