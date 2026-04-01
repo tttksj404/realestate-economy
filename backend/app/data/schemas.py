@@ -132,6 +132,17 @@ class EconomyOverview(BaseModel):
 # 채팅 스키마
 # ─────────────────────────────────────────────────────────────
 
+class MacroInterpretation(BaseModel):
+    """거시경제 해석 및 예측 결과"""
+
+    period: str = Field(description="분석 기준 연월")
+    overall_signal: Literal["호황", "보통", "침체"] = Field(description="종합 경제 신호")
+    national_avg_indicators: IndicatorData = Field(description="전국 평균 지표")
+    interpretation: str = Field(description="LLM 생성 거시경제 해석 리포트")
+    region_count: int = Field(description="분석 지역 수")
+    generated_at: datetime
+
+
 class ChatMessage(BaseModel):
     """단일 채팅 메시지"""
 
