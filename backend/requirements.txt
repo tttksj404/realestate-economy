@@ -21,7 +21,7 @@ chromadb==0.5.20
 
 # Embedding & ML
 sentence-transformers==3.3.1
-transformers==4.47.1
+transformers==4.46.3
 torch==2.5.1
 torchvision==0.20.1
 torchaudio==2.5.1

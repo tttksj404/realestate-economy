@@ -19,13 +19,14 @@ lxml==5.3.0
 # Vector Store
 chromadb==0.5.20
 
-# Embedding & ML (CUDA)
+# Embedding & ML (CUDA — PyTorch nightly for Blackwell/sm_120)
 sentence-transformers==3.3.1
-transformers==4.47.1
---extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.5.1+cu124
-torchvision==0.20.1+cu124
-torchaudio==2.5.1+cu124
+transformers==4.46.3
+--extra-index-url https://download.pytorch.org/whl/nightly/cu128
+--pre
+torch
+torchvision
+torchaudio
 
 # Fine-tuning (QLoRA)
 peft==0.14.0
@@ -43,7 +44,7 @@ redis==5.2.1
 
 # Utilities
 python-dotenv==1.0.1
-numpy==1.26.4
+numpy
 
 # Test
 pytest==8.3.4

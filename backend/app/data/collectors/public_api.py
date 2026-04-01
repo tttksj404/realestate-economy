@@ -19,13 +19,13 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # 공공데이터포털 베이스 URL
-BASE_URL = "https://apis.data.go.kr/1613000"
+BASE_URL = "http://apis.data.go.kr/1613000"
 
-# API 엔드포인트 (유형별)
-APARTMENT_TRADE_URL = f"{BASE_URL}/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"         # 아파트 (apt)
-DETACHED_TRADE_URL = f"{BASE_URL}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade"            # 단독/다가구 (small)
-VILLA_TRADE_URL = f"{BASE_URL}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"               # 연립다세대 (together)
-OFFICETEL_TRADE_URL = f"{BASE_URL}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"       # 오피스텔 (office)
+# API 엔드포인트 (개발계정: Dev 접미사 사용)
+APARTMENT_TRADE_URL = f"{BASE_URL}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev"         # 아파트 (apt)
+DETACHED_TRADE_URL = f"{BASE_URL}/RTMSDataSvcSHTradeDev/getRTMSDataSvcSHTradeDev"            # 단독/다가구 (small)
+VILLA_TRADE_URL = f"{BASE_URL}/RTMSDataSvcRHTradeDev/getRTMSDataSvcRHTradeDev"               # 연립다세대 (together)
+OFFICETEL_TRADE_URL = f"{BASE_URL}/RTMSDataSvcOffiTradeDev/getRTMSDataSvcOffiTradeDev"       # 오피스텔 (office)
 
 # 한 번에 가져올 최대 건수
 DEFAULT_NUM_OF_ROWS = 1000
@@ -51,7 +51,7 @@ def _parse_xml_response(xml_text: str) -> List[Dict[str, Any]]:
 
         # 응답 코드 확인
         result_code = root.findtext(".//resultCode", default="")
-        if result_code != "00":
+        if result_code not in ("00", "000"):
             result_msg = root.findtext(".//resultMsg", default="Unknown error")
             logger.error(f"API error: {result_code} - {result_msg}")
             return []
@@ -125,7 +125,7 @@ async def fetch_apartment_trades(
         "pageNo": page_no,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
         try:
             resp = await client.get(APARTMENT_TRADE_URL, params=params)
             resp.raise_for_status()
@@ -140,22 +140,21 @@ async def fetch_apartment_trades(
     result = []
 
     for item in raw_items:
-        # 거래일 조합: 년 + 월 + 일
-        year = item.get("년", "")
-        month = str(item.get("월", "")).zfill(2)
-        day = str(item.get("일", "")).zfill(2)
+        year = item.get("년") or item.get("dealYear", "")
+        month = str(item.get("월") or item.get("dealMonth", "")).zfill(2)
+        day = str(item.get("일") or item.get("dealDay", "")).zfill(2)
         deal_date = f"{year}-{month}-{day}" if year else None
 
         result.append(
             {
-                "deal_amount": _safe_float(item.get("거래금액")),
-                "area_sqm": _safe_float(item.get("전용면적")),
+                "deal_amount": _safe_float(item.get("거래금액") or item.get("dealAmount")),
+                "area_sqm": _safe_float(item.get("전용면적") or item.get("excluUseAr")),
                 "deal_date": deal_date,
-                "floor": _safe_int(item.get("층")),
-                "built_year": _safe_int(item.get("건축년도")),
-                "apt_name": item.get("아파트"),
+                "floor": _safe_int(item.get("층") or item.get("floor")),
+                "built_year": _safe_int(item.get("건축년도") or item.get("buildYear")),
+                "apt_name": item.get("아파트") or item.get("aptNm"),
                 "region_code": region_code,
-                "dong_name": item.get("법정동"),
+                "dong_name": item.get("법정동") or item.get("umdNm"),
                 "property_type": "아파트",
                 "source": "공공API",
             }
@@ -191,7 +190,7 @@ async def fetch_villa_trades(
         "pageNo": page_no,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
         try:
             resp = await client.get(VILLA_TRADE_URL, params=params)
             resp.raise_for_status()
@@ -206,21 +205,21 @@ async def fetch_villa_trades(
     result = []
 
     for item in raw_items:
-        year = item.get("년", "")
-        month = str(item.get("월", "")).zfill(2)
-        day = str(item.get("일", "")).zfill(2)
+        year = item.get("년") or item.get("dealYear", "")
+        month = str(item.get("월") or item.get("dealMonth", "")).zfill(2)
+        day = str(item.get("일") or item.get("dealDay", "")).zfill(2)
         deal_date = f"{year}-{month}-{day}" if year else None
 
         result.append(
             {
-                "deal_amount": _safe_float(item.get("거래금액")),
-                "area_sqm": _safe_float(item.get("전용면적")),
+                "deal_amount": _safe_float(item.get("거래금액") or item.get("dealAmount")),
+                "area_sqm": _safe_float(item.get("전용면적") or item.get("excluUseAr")),
                 "deal_date": deal_date,
-                "floor": _safe_int(item.get("층")),
-                "built_year": _safe_int(item.get("건축년도")),
-                "building_name": item.get("연립다세대"),
+                "floor": _safe_int(item.get("층") or item.get("floor")),
+                "built_year": _safe_int(item.get("건축년도") or item.get("buildYear")),
+                "building_name": item.get("연립다세대") or item.get("mhouseNm"),
                 "region_code": region_code,
-                "dong_name": item.get("법정동"),
+                "dong_name": item.get("법정동") or item.get("umdNm"),
                 "property_type": "빌라",
                 "source": "공공API",
             }
@@ -256,7 +255,7 @@ async def fetch_detached_trades(
         "pageNo": page_no,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
         try:
             resp = await client.get(DETACHED_TRADE_URL, params=params)
             resp.raise_for_status()
@@ -271,21 +270,21 @@ async def fetch_detached_trades(
     result = []
 
     for item in raw_items:
-        year = item.get("년", "")
-        month = str(item.get("월", "")).zfill(2)
-        day = str(item.get("일", "")).zfill(2)
+        year = item.get("년") or item.get("dealYear", "")
+        month = str(item.get("월") or item.get("dealMonth", "")).zfill(2)
+        day = str(item.get("일") or item.get("dealDay", "")).zfill(2)
         deal_date = f"{year}-{month}-{day}" if year else None
 
         result.append(
             {
-                "deal_amount": _safe_float(item.get("거래금액")),
-                "area_sqm": _safe_float(item.get("대지면적") or item.get("연면적")),
+                "deal_amount": _safe_float(item.get("거래금액") or item.get("dealAmount")),
+                "area_sqm": _safe_float(item.get("대지면적") or item.get("연면적") or item.get("totFlrAr")),
                 "deal_date": deal_date,
-                "floor": None,  # 단독주택은 층 정보 없음
-                "built_year": _safe_int(item.get("건축년도")),
-                "building_name": item.get("주택유형"),
+                "floor": None,
+                "built_year": _safe_int(item.get("건축년도") or item.get("buildYear")),
+                "building_name": item.get("주택유형") or item.get("houseType"),
                 "region_code": region_code,
-                "dong_name": item.get("법정동"),
+                "dong_name": item.get("법정동") or item.get("umdNm"),
                 "property_type": "단독다가구",
                 "source": "공공API",
             }
@@ -321,7 +320,7 @@ async def fetch_officetel_trades(
         "pageNo": page_no,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
         try:
             resp = await client.get(OFFICETEL_TRADE_URL, params=params)
             resp.raise_for_status()
@@ -336,21 +335,21 @@ async def fetch_officetel_trades(
     result = []
 
     for item in raw_items:
-        year = item.get("년", "")
-        month = str(item.get("월", "")).zfill(2)
-        day = str(item.get("일", "")).zfill(2)
+        year = item.get("년") or item.get("dealYear", "")
+        month = str(item.get("월") or item.get("dealMonth", "")).zfill(2)
+        day = str(item.get("일") or item.get("dealDay", "")).zfill(2)
         deal_date = f"{year}-{month}-{day}" if year else None
 
         result.append(
             {
-                "deal_amount": _safe_float(item.get("거래금액")),
-                "area_sqm": _safe_float(item.get("전용면적")),
+                "deal_amount": _safe_float(item.get("거래금액") or item.get("dealAmount")),
+                "area_sqm": _safe_float(item.get("전용면적") or item.get("excluUseAr")),
                 "deal_date": deal_date,
-                "floor": _safe_int(item.get("층")),
-                "built_year": _safe_int(item.get("건축년도")),
-                "building_name": item.get("단지"),
+                "floor": _safe_int(item.get("층") or item.get("floor")),
+                "built_year": _safe_int(item.get("건축년도") or item.get("buildYear")),
+                "building_name": item.get("단지") or item.get("offiNm"),
                 "region_code": region_code,
-                "dong_name": item.get("법정동"),
+                "dong_name": item.get("법정동") or item.get("umdNm"),
                 "property_type": "오피스텔",
                 "source": "공공API",
             }
