@@ -1,4 +1,4 @@
-﻿import {
+import {
   getEconomyOverview,
   getRegionDetail,
   getRegionListings,

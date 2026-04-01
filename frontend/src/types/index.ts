@@ -1,4 +1,4 @@
-﻿export type SignalType = 'boom' | 'normal' | 'slump'
+export type SignalType = 'boom' | 'normal' | 'slump'
 export type PropertyType = '아파트' | '빌라' | '오피스텔' | '단독주택' | '상가'
 
 export interface IndicatorData {

@@ -1,4 +1,5 @@
 import logging
+import logging.config
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -14,6 +15,24 @@ from app.config import settings
 from app.db.database import engine
 from app.db.models import Base
 
+
+def _configure_logging() -> None:
+    level = settings.LOG_LEVEL.upper()
+    fmt = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    if settings.is_production:
+        fmt = '{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}'
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {"default": {"format": fmt, "datefmt": "%Y-%m-%dT%H:%M:%S%z"}},
+            "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "default"}},
+            "root": {"level": level, "handlers": ["console"]},
+        }
+    )
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +84,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not settings.API_KEY:
+            return await call_next(request)
+        if request.url.path in _PUBLIC_PATHS:
+            return await call_next(request)
+        api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        if api_key != settings.API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"code": "unauthorized", "message": "유효한 API 키가 필요합니다."}},
+            )
+        return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up 부동산 경제 분석 서비스...")
@@ -88,17 +125,19 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    enable_docs = not settings.is_production
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         description="부동산 시장 경제 상황 분석 및 RAG 기반 AI 채팅 서비스",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if enable_docs else None,
+        redoc_url="/redoc" if enable_docs else None,
+        openapi_url="/openapi.json" if enable_docs else None,
         lifespan=lifespan,
     )
 
     app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(APIKeyMiddleware)
     app.add_middleware(RateLimitMiddleware, max_requests=120, window_seconds=60)
 
     app.add_middleware(

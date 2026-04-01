@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   EconomyOverview,
   RegionDetail,
   ListingsResponse,
@@ -9,8 +9,10 @@
 } from '@/types'
 import axios from 'axios'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+
 export const apiClient = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -75,7 +77,7 @@ export async function streamChat(
   onError: (err: Error) => void
 ): Promise<void> {
   try {
-    const response = await fetch('/api/v1/chat', {
+    const response = await fetch(`${API_BASE_URL}/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

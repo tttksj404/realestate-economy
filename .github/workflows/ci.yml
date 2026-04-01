@@ -27,7 +27,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff mypy
+          pip install ruff mypy pip-audit pytest-cov
 
       - name: Lint (ruff)
         run: ruff check app tests scripts
@@ -35,8 +35,12 @@ jobs:
       - name: Type check (mypy)
         run: mypy --ignore-missing-imports app
 
-      - name: Test (pytest)
-        run: pytest -q
+      - name: Test with coverage
+        run: pytest --cov=app --cov-report=term-missing -q
+
+      - name: Security audit (pip-audit)
+        run: pip-audit --strict
+        continue-on-error: true
 
   frontend:
     name: Frontend type/test/build
