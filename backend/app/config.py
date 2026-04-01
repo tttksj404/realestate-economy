@@ -1,4 +1,6 @@
-﻿from typing import List
+import secrets
+import warnings
+from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,6 +44,9 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = False
 
+    SECRET_KEY: str = ""
+    API_KEY: str = ""
+
     LOG_LEVEL: str = "INFO"
 
     LLM_MAX_NEW_TOKENS: int = 1024
@@ -60,5 +65,24 @@ class Settings(BaseSettings):
     SCHEDULER_SOURCE: str = "all"
     SCHEDULER_MONTHS: int = 3
 
+    WEB_CONCURRENCY: int = 1
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
+
+    def validate_production(self) -> None:
+        if not self.is_production:
+            return
+        if not self.SECRET_KEY or self.SECRET_KEY == "change_me_to_a_long_random_string":
+            raise ValueError("SECRET_KEY must be set in production. Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\"")
+
+    def get_secret_key(self) -> str:
+        if self.SECRET_KEY:
+            return self.SECRET_KEY
+        warnings.warn("SECRET_KEY not set — using random key (sessions lost on restart)", stacklevel=2)
+        return secrets.token_urlsafe(48)
+
 
 settings = Settings()
+settings.validate_production()

@@ -1,4 +1,4 @@
-﻿import { streamChat } from '@/api/client'
+import { streamChat } from '@/api/client'
 import type { ChatMessage } from '@/types'
 import { useCallback, useRef, useState } from 'react'
 
