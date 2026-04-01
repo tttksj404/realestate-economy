@@ -353,30 +353,13 @@ def compute_all_indicators(
     jeonse_listings: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Optional[float]]:
     """
-    6개 핵심 지표 전체 계산
+    6개 핵심 지표 전체 계산 (레거시 — 매물 데이터 기반)
 
-    Args:
-        region: 지역 코드
-        period: 분석 기준 연월 (YYYYMM)
-        current_listings: 현재월 매물 데이터
-        prev_listings: 전월 매물 데이터
-        current_transactions: 현재월 실거래가 데이터
-        prev_transactions: 전월 실거래가 데이터
-        jeonse_listings: 전세 매물 데이터 (없으면 current_listings에서 추출 시도)
-
-    Returns:
-        {
-            "low_price_listing_ratio": float | None,
-            "listing_count_change": float | None,
-            "price_gap_ratio": float | None,
-            "regional_price_index": float | None,
-            "sale_speed": float | None,
-            "jeonse_ratio": float | None,
-        }
+    매물(호가) 데이터가 없으면 대부분 None 반환.
+    R-ONE 기반 compute_all_indicators_v2를 사용 권장.
     """
-    logger.info(f"Computing all indicators for region={region}, period={period}")
+    logger.info(f"Computing all indicators (legacy) for region={region}, period={period}")
 
-    # 전세 매물이 별도로 없으면 current_listings에서 전세가 있는 항목 사용
     if jeonse_listings is None:
         jeonse_listings = [
             l for l in current_listings
@@ -404,14 +387,184 @@ def compute_all_indicators(
         ),
     }
 
+    return indicators
+
+
+# =============================================================================
+# V2 지표: R-ONE 공식 통계 + 국토부 실거래 + 온비드 공매 기반
+# =============================================================================
+
+
+def compute_sale_index_change(
+    current_index: Optional[float],
+    prev_index: Optional[float],
+) -> Optional[float]:
+    """
+    매매가격지수 변동률 (R-ONE 공식 지수 기반)
+
+    전월 대비 변동률 = (당월지수 - 전월지수) / 전월지수 × 100
+    양수 = 상승, 음수 = 하락
+    """
+    if current_index is None or prev_index is None or prev_index == 0:
+        return None
+    return round(((current_index - prev_index) / prev_index) * 100, 3)
+
+
+def compute_jeonse_ratio_v2(
+    sale_avg: Optional[float],
+    jeonse_avg: Optional[float],
+) -> Optional[float]:
+    """
+    전세가율 (R-ONE 공식 평균가격 기반)
+
+    전세가율 = 전세평균가 / 매매평균가 × 100
+    높을수록 갭투자 위험, 매매 약세
+    """
+    if sale_avg is None or jeonse_avg is None or sale_avg == 0:
+        return None
+    return round((jeonse_avg / sale_avg) * 100, 2)
+
+
+def compute_unsold_change(
+    current_unsold: Optional[int],
+    prev_unsold: Optional[int],
+) -> Optional[float]:
+    """
+    미분양 증감률
+
+    전월 대비 미분양 주택 수 변동률
+    양수 = 미분양 증가 (침체), 음수 = 미분양 감소 (호황)
+    """
+    if current_unsold is None or prev_unsold is None or prev_unsold == 0:
+        return None
+    return round(((current_unsold - prev_unsold) / prev_unsold) * 100, 2)
+
+
+def compute_tx_count_change(
+    current_count: int,
+    prev_count: int,
+) -> Optional[float]:
+    """
+    거래량 변동률 (국토부 실거래 건수 기반)
+
+    전월 대비 실거래 건수 변동률
+    양수 = 거래 증가 (호황), 음수 = 거래 감소 (침체)
+    """
+    if prev_count == 0:
+        return None
+    return round(((current_count - prev_count) / prev_count) * 100, 2)
+
+
+def compute_supply_demand_score(
+    supply_demand_index: Optional[float],
+) -> Optional[float]:
+    """
+    매매수급동향 점수 (R-ONE 주간 수급지수)
+
+    원본: 0~200, 100 = 균형
+    변환: 100 초과 = 수요 우위 (호황), 100 미만 = 공급 우위 (침체)
+    그대로 반환 (100 기준으로 해석)
+    """
+    if supply_demand_index is None:
+        return None
+    return round(supply_demand_index, 2)
+
+
+def compute_auction_change(
+    current_auction_count: int,
+    prev_auction_count: int,
+) -> Optional[float]:
+    """
+    공매 물건 증감률 (온비드 데이터)
+
+    전월 대비 공매 물건 수 변동률
+    양수 = 공매 증가 (침체), 음수 = 공매 감소 (호황)
+    """
+    if prev_auction_count == 0:
+        return None
+    return round(((current_auction_count - prev_auction_count) / prev_auction_count) * 100, 2)
+
+
+def compute_all_indicators_v2(
+    region: str,
+    period: str,
+    reb_data: Dict[str, Any],
+    prev_reb_data: Dict[str, Any],
+    current_tx_count: int,
+    prev_tx_count: int,
+    current_auction_count: int = 0,
+    prev_auction_count: int = 0,
+) -> Dict[str, Optional[float]]:
+    """
+    V2 지표 체계: R-ONE 공식 통계 기반 6개 핵심 지표
+
+    Args:
+        region: 지역 코드 (2자리)
+        period: YYYYMM
+        reb_data: R-ONE 당월 데이터 (fetch_all_reb_monthly 결과)
+        prev_reb_data: R-ONE 전월 데이터
+        current_tx_count: 당월 실거래 건수
+        prev_tx_count: 전월 실거래 건수
+        current_auction_count: 당월 공매 건수
+        prev_auction_count: 전월 공매 건수
+
+    Returns:
+        {
+            "sale_index_change": 매매가격지수 변동률 (%),
+            "jeonse_ratio": 전세가율 (%),
+            "unsold_change": 미분양 증감률 (%),
+            "tx_count_change": 거래량 변동률 (%),
+            "supply_demand": 매매수급동향 (지수),
+            "auction_change": 공매 증감률 (%),
+        }
+    """
+    logger.info(f"Computing V2 indicators for region={region}, period={period}")
+
+    # R-ONE 데이터에서 해당 지역 추출
+    def _find_region(items: List[Dict], key: str) -> Optional[float]:
+        for item in items:
+            if item.get("region_code") == region:
+                return item.get(key)
+        return None
+
+    # 매매지수 변동률
+    cur_sale_idx = _find_region(reb_data.get("sale_index", []), "sale_index")
+    prev_sale_idx = _find_region(prev_reb_data.get("sale_index", []), "sale_index")
+
+    # 전세가율
+    avg_price = None
+    for item in reb_data.get("avg_prices", []):
+        if item.get("region_code") == region:
+            avg_price = item
+            break
+
+    # 미분양
+    cur_unsold = _find_region(reb_data.get("unsold", []), "unsold_count")
+    prev_unsold = _find_region(prev_reb_data.get("unsold", []), "unsold_count")
+
+    # 수급동향 (최신 주간)
+    supply_demand = _find_region(reb_data.get("supply_demand", []), "supply_demand_index")
+
+    indicators = {
+        "sale_index_change": compute_sale_index_change(cur_sale_idx, prev_sale_idx),
+        "jeonse_ratio": avg_price.get("jeonse_ratio") if avg_price else None,
+        "unsold_change": compute_unsold_change(
+            int(cur_unsold) if cur_unsold is not None else None,
+            int(prev_unsold) if prev_unsold is not None else None,
+        ),
+        "tx_count_change": compute_tx_count_change(current_tx_count, prev_tx_count),
+        "supply_demand": compute_supply_demand_score(supply_demand),
+        "auction_change": compute_auction_change(current_auction_count, prev_auction_count),
+    }
+
     logger.info(
-        f"Indicators for {region}/{period}: "
-        f"low_price={indicators['low_price_listing_ratio']}, "
-        f"listing_change={indicators['listing_count_change']}, "
-        f"price_gap={indicators['price_gap_ratio']}, "
-        f"price_index={indicators['regional_price_index']}, "
-        f"sale_speed={indicators['sale_speed']}, "
-        f"jeonse={indicators['jeonse_ratio']}"
+        f"V2 Indicators for {region}/{period}: "
+        f"sale_idx_chg={indicators['sale_index_change']}, "
+        f"jeonse_ratio={indicators['jeonse_ratio']}, "
+        f"unsold_chg={indicators['unsold_change']}, "
+        f"tx_count_chg={indicators['tx_count_change']}, "
+        f"supply_demand={indicators['supply_demand']}, "
+        f"auction_chg={indicators['auction_change']}"
     )
 
     return indicators

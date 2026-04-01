@@ -18,13 +18,14 @@ function signalText(signal: SignalType): string {
 
 function RegionComparisonChart({ regions }: { regions: { region_code: string; region_name: string; confidence: number; indicators: { name: string; value: number | string }[] }[] }) {
   const chartData = regions.map((r) => {
-    const lowRatio = r.indicators.find((i) => i.name === 'low_price_listing_ratio')
-    const listingChange = r.indicators.find((i) => i.name === 'listing_count_change')
+    const saleIdx = r.indicators.find((i) => i.name === 'sale_index_change')
+    const txChange = r.indicators.find((i) => i.name === 'tx_count_change')
+    const supplyDemand = r.indicators.find((i) => i.name === 'supply_demand')
     return {
       name: r.region_name.replace(/특별시|광역시|특별자치시|도/g, ''),
-      저가매물비율: typeof lowRatio?.value === 'number' ? lowRatio.value : 0,
-      매물증감률: typeof listingChange?.value === 'number' ? listingChange.value : 0,
-      신뢰도: r.confidence,
+      매매지수변동: typeof saleIdx?.value === 'number' ? saleIdx.value : 0,
+      거래량변동: typeof txChange?.value === 'number' ? txChange.value : 0,
+      수급동향: typeof supplyDemand?.value === 'number' ? supplyDemand.value - 100 : 0,
     }
   })
 
@@ -40,9 +41,9 @@ function RegionComparisonChart({ regions }: { regions: { region_code: string; re
           <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
           <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '8px', color: '#e2e8f0' }} />
           <Legend wrapperStyle={{ color: '#94a3b8' }} />
-          <Bar dataKey="저가매물비율" fill="#f87171" radius={[4, 4, 0, 0]} />
-          <Bar dataKey="매물증감률" fill="#fbbf24" radius={[4, 4, 0, 0]} />
-          <Bar dataKey="신뢰도" fill="#34d399" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="매매지수변동" fill="#60a5fa" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="거래량변동" fill="#fbbf24" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="수급동향" fill="#34d399" radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </section>
