@@ -1,0 +1,36 @@
+# GPU override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Prerequisites:
+#   1. NVIDIA Driver installed on host
+#   2. NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+#   3. Docker Desktop → Settings → Resources → Enable GPU
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 12g
+    environment:
+      LLM_MODEL_PATH: ${LLM_MODEL_PATH:-beomi/Llama-3-Open-Ko-8B}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-intfloat/multilingual-e5-large}
+      LLM_MAX_NEW_TOKENS: ${LLM_MAX_NEW_TOKENS:-1024}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      NVIDIA_VISIBLE_DEVICES: all
+      # HuggingFace cache → persistent volume
+      HF_HOME: /app/ml/models/hf_cache
+      TRANSFORMERS_CACHE: /app/ml/models/hf_cache
+    volumes:
+      - model_data:/app/ml/models
+    healthcheck:
+      # LLM 로딩 시간 고려
+      start_period: 180s

@@ -9,6 +9,19 @@ if [ -z "${SECRET_KEY:-}" ]; then
   echo "[entrypoint] Generated random SECRET_KEY (will change on restart)"
 fi
 
+# Auto-download models on first run (GPU container)
+if [ "${AUTO_DOWNLOAD_MODELS:-false}" = "true" ]; then
+  if [ ! -d "/app/ml/models/hf_cache/hub/models--${LLM_MODEL_PATH:-beomi/Llama-3-Open-Ko-8B}" ] 2>/dev/null; then
+    echo "[entrypoint] Downloading models (first run)..."
+    python scripts/download_model.py \
+      --llm "${LLM_MODEL_PATH:-beomi/Llama-3-Open-Ko-8B}" \
+      --embedding "${EMBEDDING_MODEL_NAME:-intfloat/multilingual-e5-large}" \
+      || echo "[entrypoint] Model download warning (may already be cached)"
+  else
+    echo "[entrypoint] Models already cached"
+  fi
+fi
+
 if [ "${ENABLE_SCHEDULER:-true}" = "true" ]; then
   echo "[entrypoint] Starting scheduler in background"
   python scripts/scheduler_runner.py >> /app/logs/scheduler.log 2>&1 &
