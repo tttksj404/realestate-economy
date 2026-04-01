@@ -47,7 +47,7 @@ logging.basicConfig(
 logger = logging.getLogger("collect_data")
 
 # ---------------------------------------------------------------------------
-# 지역 코드 매핑 (사용자 입력 → 법정동 시도 코드)
+# 지역 코드 매핑 (사용자 입력 → (시도코드, 지역명))
 # ---------------------------------------------------------------------------
 REGION_CODE_MAP: Dict[str, Tuple[str, str]] = {
     "서울": ("11", "서울특별시"),
@@ -69,6 +69,28 @@ REGION_CODE_MAP: Dict[str, Tuple[str, str]] = {
     "제주": ("50", "제주특별자치도"),
 }
 
+# 시도별 대표 시군구 코드 (국토부 API는 5자리 시군구 코드 필수)
+REGION_SGG_CODES: Dict[str, List[str]] = {
+    "11": ["11110", "11140", "11170", "11200", "11215", "11230", "11260", "11290",
+           "11305", "11320", "11350", "11380", "11410", "11440", "11470", "11500",
+           "11530", "11545", "11560", "11590", "11620", "11650", "11680", "11710", "11740"],
+    "26": ["26110", "26140", "26170", "26200", "26230", "26260", "26290", "26320",
+           "26350", "26380", "26410", "26440", "26470", "26500", "26530", "26710"],
+    "27": ["27110", "27140", "27170", "27200", "27230", "27260", "27290", "27710"],
+    "28": ["28110", "28140", "28177", "28185", "28200", "28237", "28245", "28260",
+           "28710", "28720"],
+    "29": ["29110", "29140", "29155", "29170", "29200"],
+    "30": ["30110", "30140", "30170", "30200", "30230"],
+    "31": ["31110", "31140", "31170", "31200", "31710"],
+    "36": ["36110"],
+    "41": ["41111", "41113", "41115", "41117", "41131", "41133", "41135", "41150",
+           "41171", "41173", "41190", "41210", "41220", "41250", "41271", "41273",
+           "41281", "41285", "41287", "41290", "41310", "41360", "41370", "41390",
+           "41410", "41430", "41450", "41461", "41463", "41465", "41480", "41500",
+           "41550", "41570", "41590", "41610", "41630", "41650", "41670", "41800",
+           "41820", "41830"],
+}
+
 # 기본 수집 대상 지역 (9대 광역시도)
 DEFAULT_REGIONS = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "세종"]
 
@@ -87,6 +109,45 @@ def build_year_months(months_back: int) -> List[str]:
     return result
 
 
+def _parse_date(val) -> Optional[date]:
+    """문자열 또는 date를 date 객체로 변환"""
+    if val is None:
+        return None
+    if isinstance(val, date):
+        return val
+    try:
+        return date.fromisoformat(str(val).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+async def _save_trades(
+    db_session: AsyncSession,
+    trades: List[Dict],
+    region_code: str,
+    region_name: str,
+    property_type: str,
+) -> int:
+    """거래 데이터를 DB에 저장하고 건수를 반환합니다."""
+    for trade in trades:
+        deal_amount = trade.get("deal_amount")
+        if not deal_amount:
+            continue
+        obj = RealEstateTransaction(
+            region_code=region_code,
+            region_name=region_name,
+            property_type=property_type,
+            deal_amount=deal_amount,
+            area_sqm=trade.get("area_sqm"),
+            deal_date=_parse_date(trade.get("deal_date")),
+            floor=trade.get("floor"),
+            built_year=trade.get("built_year"),
+            source="공공API",
+        )
+        db_session.add(obj)
+    return len(trades)
+
+
 async def collect_public_api(
     db_session: AsyncSession,
     region_code: str,
@@ -96,94 +157,26 @@ async def collect_public_api(
     """공공API(국토부 실거래가)에서 거래 데이터를 수집하여 DB에 저장합니다."""
     saved_counts = {"apartment": 0, "detached": 0, "villa": 0, "officetel": 0}
 
+    sgg_codes = REGION_SGG_CODES.get(region_code, [f"{region_code}110"])
+
+    fetchers = [
+        ("apartment", "아파트", public_api.fetch_apartment_trades),
+        ("villa", "빌라", public_api.fetch_villa_trades),
+        ("detached", "단독다가구", public_api.fetch_detached_trades),
+        ("officetel", "오피스텔", public_api.fetch_officetel_trades),
+    ]
+
     for ym in year_months:
-        year = int(ym[:4])
-        month = int(ym[4:6])
-        logger.info(f"[공공API] {region_name} {ym} 수집 중...")
+        logger.info(f"[공공API] {region_name} {ym} 수집 중 ({len(sgg_codes)}개 시군구)...")
 
-        try:
-            apt_trades = await public_api.fetch_apartment_trades(
-                region_code=region_code, year=year, month=month
-            )
-            for trade in apt_trades:
-                obj = RealEstateTransaction(
-                    region_code=region_code,
-                    region_name=region_name,
-                    property_type="아파트",
-                    deal_amount=trade.get("deal_amount", 0),
-                    area_sqm=trade.get("area_sqm"),
-                    deal_date=trade.get("deal_date"),
-                    floor=trade.get("floor"),
-                    built_year=trade.get("built_year"),
-                    source="공공API",
-                )
-                db_session.add(obj)
-            saved_counts["apartment"] += len(apt_trades)
-        except Exception as e:
-            logger.warning(f"[공공API] {region_name} {ym} 아파트 수집 실패: {e}")
-
-        try:
-            detached_trades = await public_api.fetch_detached_trades(
-                region_code=region_code, year=year, month=month
-            )
-            for trade in detached_trades:
-                obj = RealEstateTransaction(
-                    region_code=region_code,
-                    region_name=region_name,
-                    property_type="단독다가구",
-                    deal_amount=trade.get("deal_amount", 0),
-                    area_sqm=trade.get("area_sqm"),
-                    deal_date=trade.get("deal_date"),
-                    floor=trade.get("floor"),
-                    built_year=trade.get("built_year"),
-                    source="공공API",
-                )
-                db_session.add(obj)
-            saved_counts["detached"] += len(detached_trades)
-        except Exception as e:
-            logger.warning(f"[공공API] {region_name} {ym} 단독다가구 수집 실패: {e}")
-
-        try:
-            villa_trades = await public_api.fetch_villa_trades(
-                region_code=region_code, year=year, month=month
-            )
-            for trade in villa_trades:
-                obj = RealEstateTransaction(
-                    region_code=region_code,
-                    region_name=region_name,
-                    property_type="빌라",
-                    deal_amount=trade.get("deal_amount", 0),
-                    area_sqm=trade.get("area_sqm"),
-                    deal_date=trade.get("deal_date"),
-                    floor=trade.get("floor"),
-                    built_year=trade.get("built_year"),
-                    source="공공API",
-                )
-                db_session.add(obj)
-            saved_counts["villa"] += len(villa_trades)
-        except Exception as e:
-            logger.warning(f"[공공API] {region_name} {ym} 빌라 수집 실패: {e}")
-
-        try:
-            offi_trades = await public_api.fetch_officetel_trades(
-                region_code=region_code, year=year, month=month
-            )
-            for trade in offi_trades:
-                obj = RealEstateTransaction(
-                    region_code=region_code,
-                    region_name=region_name,
-                    property_type="오피스텔",
-                    deal_amount=trade.get("deal_amount", 0),
-                    area_sqm=trade.get("area_sqm"),
-                    deal_date=trade.get("deal_date"),
-                    floor=trade.get("floor"),
-                    built_year=trade.get("built_year"),
-                    source="공공API",
-                )
-                db_session.add(obj)
-            saved_counts["officetel"] += len(offi_trades)
-        except Exception as e:
-            logger.warning(f"[공공API] {region_name} {ym} 오피스텔 수집 실패: {e}")
+        for sgg in sgg_codes:
+            for key, ptype, fetch_fn in fetchers:
+                try:
+                    trades = await fetch_fn(region_code=sgg, year_month=ym)
+                    count = await _save_trades(db_session, trades, region_code, region_name, ptype)
+                    saved_counts[key] += count
+                except Exception as e:
+                    logger.warning(f"[공공API] {region_name}/{sgg} {ym} {ptype} 실패: {e}")
 
         await db_session.flush()
 

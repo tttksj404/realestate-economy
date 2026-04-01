@@ -1,60 +1,30 @@
-# GPU-enabled Dockerfile for LLM inference + fine-tuning
-# Base: NVIDIA CUDA 12.4 + Python 3.11
+# GPU-enabled Dockerfile — lightweight build (no wheel compilation)
+# PyTorch cu124 is installed directly from pre-built wheels
+#
 # Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+FROM python:3.11-slim
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+LABEL maintainer="realestate-economy-service"
 
-# Install Python 3.11
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-dev python3.11-venv python3-pip \
-    gcc g++ libpq-dev libxml2-dev libxslt1-dev git \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-
-WORKDIR /build
-COPY requirements.gpu.txt .
-RUN python -m pip install --upgrade pip && \
-    pip wheel --wheel-dir /wheels -r requirements.gpu.txt
-
-
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Install Python 3.11 runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip \
-    curl libpq5 libxml2 libxslt1.1 tzdata \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ libpq-dev libxml2-dev libxslt1-dev \
+    curl tzdata git \
+    && rm -rf /var/lib/apt/lists/* && \
     addgroup --system appgroup && \
     adduser --system --ingroup appgroup appuser
 
-WORKDIR /app
-
 COPY requirements.gpu.txt .
-COPY --from=builder /wheels /wheels
 RUN pip install --upgrade pip && \
-    pip install --no-index --find-links /wheels -r requirements.gpu.txt && \
-    rm -rf /wheels
+    pip install -r requirements.gpu.txt
 
 COPY . .
 RUN mkdir -p /app/chroma_db /app/logs /app/ml/models && \

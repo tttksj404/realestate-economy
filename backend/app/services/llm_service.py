@@ -57,7 +57,7 @@ class LLMService:
                 AutoModelForCausalLM,
                 AutoTokenizer,
                 TextIteratorStreamer,
-                pipeline,
+                pipeline as hf_pipeline,
                 BitsAndBytesConfig,
             )
 
@@ -102,7 +102,7 @@ class LLMService:
 
             self._model = model
             self._tokenizer = tokenizer
-            self._pipeline = pipeline(
+            self._pipeline = hf_pipeline(
                 "text-generation",
                 model=model,
                 tokenizer=tokenizer,

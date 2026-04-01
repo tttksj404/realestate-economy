@@ -1,7 +1,8 @@
 import secrets
 import warnings
-from typing import List
+from typing import List, Union
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,12 +36,19 @@ class Settings(BaseSettings):
     LLM_MODEL_PATH: str = "beomi/Llama-3-Open-Ko-8B"
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
 
-    CORS_ORIGINS: List[str] = [
+    CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
     APP_NAME: str = "Real Estate Economy Service"
     APP_VERSION: str = "1.0.0"
