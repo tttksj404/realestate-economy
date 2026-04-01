@@ -46,6 +46,22 @@ export async function getRegionDetail(regionCode: string): Promise<RegionDetail>
   return data
 }
 
+export interface MacroInterpretation {
+  period: string
+  overall_signal: 'boom' | 'normal' | 'slump'
+  national_avg_indicators: Record<string, number | null>
+  interpretation: string
+  region_count: number
+  generated_at: string
+}
+
+export async function getMacroInterpretation(period?: string): Promise<MacroInterpretation> {
+  const params: Record<string, string> = {}
+  if (period) params.period = period
+  const { data } = await apiClient.get<MacroInterpretation>('/economy/macro/interpret', { params })
+  return data
+}
+
 export async function getRegions(): Promise<Region[]> {
   const { data } = await apiClient.get<Region[]>('/regions')
   return data

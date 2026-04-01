@@ -1,5 +1,6 @@
 import {
   getEconomyOverview,
+  getMacroInterpretation,
   getRegionDetail,
   getRegionListings,
   getRegionPrices,
@@ -9,6 +10,7 @@ import { useQuery } from '@tanstack/react-query'
 
 export const queryKeys = {
   economyOverview: ['economy', 'overview'] as const,
+  macroInterpretation: ['economy', 'macro'] as const,
   regionDetail: (code: string) => ['economy', 'region', code] as const,
   regions: ['regions'] as const,
   regionListings: (code: string, page: number, type?: string) =>
@@ -21,6 +23,15 @@ export function useEconomyOverview() {
     queryKey: queryKeys.economyOverview,
     queryFn: getEconomyOverview,
     staleTime: 1000 * 60 * 5,
+  })
+}
+
+export function useMacroInterpretation(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.macroInterpretation,
+    queryFn: () => getMacroInterpretation(),
+    enabled,
+    staleTime: 1000 * 60 * 10,
   })
 }
 

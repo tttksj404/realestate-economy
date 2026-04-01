@@ -325,22 +325,62 @@ class LLMService:
             yield response[i : i + chunk_size]
             await asyncio.sleep(0.01)
 
+    async def interpret_macro(
+        self,
+        national_indicators: Dict,
+        region_signals: List[Dict],
+        period: str,
+        context: str = "",
+    ) -> str:
+        """
+        거시경제 해석 및 예측 리포트 생성
+
+        전국 평균 지표 + 지역별 신호를 종합하여
+        현재 경제 상황 진단과 단기 전망을 생성합니다.
+        """
+        indicator_text = self._indicators_to_text(national_indicators)
+
+        signal_summary = []
+        for rs in region_signals:
+            signal_summary.append(f"  {rs['region_name']}: {rs['signal']} (신뢰도 {rs['confidence']:.0%})")
+        signal_text = "\n".join(signal_summary) if signal_summary else "데이터 없음"
+
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"{period[:4]}년 {period[4:6]}월 기준 한국 부동산 시장을 통해 거시경제 상황을 해석해주세요.\n\n"
+                    f"## 전국 평균 지표\n{indicator_text}\n\n"
+                    f"## 주요 지역별 신호\n{signal_text}\n\n"
+                    "다음 관점에서 분석해주세요:\n"
+                    "1. **현재 경제 상황 진단**: 6개 지표가 종합적으로 시사하는 거시경제 상태\n"
+                    "2. **핵심 리스크**: 미분양 추이, 전세가율, 수급동향 등에서 감지되는 위험 신호\n"
+                    "3. **지역별 온도 차이**: 수도권 vs 지방의 차별화 양상\n"
+                    "4. **향후 1~3개월 전망**: 지표 추세 기반 단기 예측\n"
+                    "5. **시사점**: 정책·금리·인구 등 거시 변수와의 연결\n\n"
+                    "각 항목 2~3문장씩, 총 5개 항목으로 정리해주세요."
+                ),
+            }
+        ]
+
+        return await self._generate_async(messages, context)
+
     @staticmethod
     def _indicators_to_text(indicators: Dict) -> str:
-        """지표 딕셔너리를 사람이 읽기 쉬운 텍스트로 변환"""
+        """V2 지표 딕셔너리를 사람이 읽기 쉬운 텍스트로 변환"""
         lines = []
         mapping = {
-            "low_price_listing_ratio": ("저가 매물 비율", "%"),
-            "listing_count_change": ("매물 증감률", "%"),
-            "price_gap_ratio": ("호가/실거래가 괴리율", "%"),
-            "regional_price_index": ("가격지수 변동", "%"),
-            "sale_speed": ("매물 소진 기간", "일"),
+            "sale_index_change": ("매매가격지수 변동률", "%"),
             "jeonse_ratio": ("전세가율", "%"),
+            "unsold_change": ("미분양 증감률", "%"),
+            "tx_count_change": ("거래량 변동률", "%"),
+            "supply_demand": ("매매수급동향", ""),
+            "auction_change": ("공매 증감률", "%"),
         }
         for key, (label, unit) in mapping.items():
             value = indicators.get(key)
             if value is not None:
-                lines.append(f"- {label}: {value:.1f}{unit}")
+                lines.append(f"- {label}: {value:.2f}{unit}")
             else:
                 lines.append(f"- {label}: 데이터 없음")
         return "\n".join(lines)

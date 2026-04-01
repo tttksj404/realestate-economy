@@ -157,7 +157,6 @@ class RAGService:
             parts.append(f"지역: {region}")
 
         if indicators:
-            # 주요 지표만 추가
             if indicators.get("signal"):
                 parts.append(f"시장신호: {indicators['signal']}")
             if indicators.get("jeonse_ratio") is not None:
@@ -166,12 +165,24 @@ class RAGService:
                     parts.append("전세가율 높음 갭투자 위험")
                 elif jr < 60:
                     parts.append("전세가율 낮음 매매 강세")
-            if indicators.get("listing_count_change") is not None:
-                lcc = indicators["listing_count_change"]
-                if lcc > 10:
-                    parts.append("매물 급증 공급 과잉")
-                elif lcc < -10:
-                    parts.append("매물 감소 공급 부족")
+            if indicators.get("sale_index_change") is not None:
+                sic = indicators["sale_index_change"]
+                if sic > 0.3:
+                    parts.append("매매가격 상승세")
+                elif sic < -0.3:
+                    parts.append("매매가격 하락세")
+            if indicators.get("unsold_change") is not None:
+                uc = indicators["unsold_change"]
+                if uc > 10:
+                    parts.append("미분양 급증 수요 위축")
+                elif uc < -10:
+                    parts.append("미분양 감소 수요 회복")
+            if indicators.get("supply_demand") is not None:
+                sd = indicators["supply_demand"]
+                if sd > 105:
+                    parts.append("수요 우위 매수세 강함")
+                elif sd < 95:
+                    parts.append("공급 우위 매도세 강함")
 
         return " ".join(parts)
 
