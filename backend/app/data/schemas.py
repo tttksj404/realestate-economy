@@ -68,25 +68,25 @@ class PriceTrendPoint(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 class IndicatorData(BaseModel):
-    """6개 핵심 경제 지표 데이터"""
+    """6개 핵심 경제 지표 데이터 (V2: R-ONE 공식 통계 기반)"""
 
-    low_price_listing_ratio: Optional[float] = Field(
-        None, description="저가 매물 비율 (%): 시세 대비 5% 이상 저렴한 매물 비중"
-    )
-    listing_count_change: Optional[float] = Field(
-        None, description="매물 증감률 (%): 전월 대비 신규 매물 증감"
-    )
-    price_gap_ratio: Optional[float] = Field(
-        None, description="호가/실거래가 괴리율 (%)"
-    )
-    regional_price_index: Optional[float] = Field(
-        None, description="지역 가격지수 변동 (%): 전월 대비"
-    )
-    sale_speed: Optional[float] = Field(
-        None, description="매물 소진 기간 (일)"
+    sale_index_change: Optional[float] = Field(
+        None, description="매매가격지수 변동률 (%): R-ONE 월간 아파트 매매지수 전월비"
     )
     jeonse_ratio: Optional[float] = Field(
-        None, description="전세가율 (%)"
+        None, description="전세가율 (%): R-ONE 전세평균가/매매평균가"
+    )
+    unsold_change: Optional[float] = Field(
+        None, description="미분양 증감률 (%): 전월 대비 미분양 주택 수 변동"
+    )
+    tx_count_change: Optional[float] = Field(
+        None, description="거래량 변동률 (%): 국토부 실거래 건수 전월비"
+    )
+    supply_demand: Optional[float] = Field(
+        None, description="매매수급동향 (지수): 100 초과=수요우위, 100 미만=공급우위"
+    )
+    auction_change: Optional[float] = Field(
+        None, description="공매 증감률 (%): 온비드 공매 물건 수 전월비"
     )
 
 

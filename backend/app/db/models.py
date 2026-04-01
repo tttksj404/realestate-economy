@@ -129,24 +129,24 @@ class EconomyIndicator(Base):
     # 분석 기준 연월 (YYYYMM)
     period: Mapped[str] = mapped_column(String(6), nullable=False, index=True)
 
-    # 6개 핵심 지표
-    low_price_listing_ratio: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="저가 매물 비율 (%): 시세 대비 5% 이상 저렴한 매물 비중"
-    )
-    listing_count_change: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="매물 증감률 (%): 전월 대비 신규 매물 증감"
-    )
-    price_gap_ratio: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="호가/실거래가 괴리율 (%): 호가와 실거래가 차이"
-    )
-    regional_price_index: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="지역 가격지수 변동 (%): 전월 대비 평균 거래가 변동"
-    )
-    sale_speed: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="매물 소진 기간 (일): 등록~거래 완료까지 평균 일수"
+    # V2 지표 (R-ONE 공식 통계 기반)
+    sale_index_change: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="매매가격지수 변동률 (%): R-ONE 월간 아파트 매매지수 전월비"
     )
     jeonse_ratio: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="전세가율 (%): 매매가 대비 전세가 비율"
+        Float, nullable=True, comment="전세가율 (%): R-ONE 전세평균가/매매평균가"
+    )
+    unsold_change: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="미분양 증감률 (%): 전월 대비 미분양 주택 수 변동"
+    )
+    tx_count_change: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="거래량 변동률 (%): 국토부 실거래 건수 전월비"
+    )
+    supply_demand: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="매매수급동향 (지수): 100 초과=수요우위"
+    )
+    auction_change: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="공매 증감률 (%): 온비드 공매 물건 수 전월비"
     )
 
     # 경제 신호 판정: 호황/보통/침체

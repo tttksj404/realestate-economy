@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # 온비드 공매 API
     ONBID_API_KEY: str = ""
 
+    # 한국부동산원 R-ONE API (https://www.reb.or.kr/r-one/)
+    KOREA_REAL_ESTATE_KEY: str = ""
+
     LLM_MODEL_PATH: str = "beomi/Llama-3-Open-Ko-8B"
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
 

@@ -33,7 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.data.collectors import public_api, onbid_api
-from app.db.models import RealEstateListing, RealEstateTransaction
+from app.data.collectors.reb_api import fetch_all_reb_monthly
+from app.db.models import EconomyIndicator, RealEstateListing, RealEstateTransaction
 
 # ---------------------------------------------------------------------------
 # 로깅 설정
@@ -315,6 +316,23 @@ async def main(
             for k, v in region_stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
+        # R-ONE (한국부동산원) 수집 — 지역 루프 밖에서 일괄 수집
+        if source in ("reb", "all"):
+            logger.info("[R-ONE] 한국부동산원 통계 수집 중...")
+            reb_count = 0
+            for ym in year_months:
+                try:
+                    reb_data = await fetch_all_reb_monthly(ym)
+                    for key in ("sale_index", "jeonse_index", "avg_prices", "unsold"):
+                        reb_count += len(reb_data.get(key, []))
+                    logger.info(f"  [R-ONE] {ym} — 매매지수 {len(reb_data.get('sale_index', []))}건, "
+                                f"전세지수 {len(reb_data.get('jeonse_index', []))}건, "
+                                f"평균가 {len(reb_data.get('avg_prices', []))}건, "
+                                f"미분양 {len(reb_data.get('unsold', []))}건")
+                except Exception as e:
+                    logger.warning(f"  [R-ONE] {ym} 수집 실패: {e}")
+            total_stats["R-ONE"] = reb_count
+
         await session.commit()
         logger.info("DB 커밋 완료")
 
@@ -358,9 +376,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source",
-        choices=["public", "onbid", "all"],
+        choices=["public", "onbid", "reb", "all"],
         default="all",
-        help="데이터 소스 선택: public(국토부) / onbid(온비드 공매) / all(모두, 기본값)",
+        help="데이터 소스 선택: public(국토부) / onbid(온비드 공매) / reb(한국부동산원) / all(모두, 기본값)",
     )
     parser.add_argument(
         "--log-level",

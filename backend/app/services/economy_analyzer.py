@@ -1,13 +1,16 @@
 """
-부동산 경제 분석 오케스트레이터
+부동산 경제 분석 오케스트레이터 (V2)
 
-피처 엔지니어링 → 룰 기반 신호 판정 → RAG 컨텍스트 검색 → LLM 분석 리포트 생성
-전체 파이프라인을 통합 조율합니다.
+R-ONE 공식 통계 + 국토부 실거래 + 온비드 공매 기반 6개 지표로 시장 판단.
+
+파이프라인:
+  R-ONE 데이터 수집 → 국토부 거래량 집계 → 온비드 공매 집계
+  → 피처 엔지니어링 → 룰 기반 신호 판정 → RAG 컨텍스트 → LLM 분석 리포트
 """
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, func, select
@@ -26,7 +29,6 @@ from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
-# 주요 분석 지역 (시도 코드 → 지역명)
 ANALYSIS_REGIONS = {
     "11": "서울특별시",
     "26": "부산광역시",
@@ -39,103 +41,71 @@ ANALYSIS_REGIONS = {
     "41": "경기도",
 }
 
-# 경제 신호 판정 임계값 (룰 기반)
-# 각 지표별로 호황/보통/침체를 구분하는 기준값
-THRESHOLDS = {
-    # 저가 매물 비율: 높을수록 침체
-    "low_price_listing_ratio": {"boom": 5.0, "recession": 15.0},
-    # 매물 증감률: 높을수록 공급 과잉 (침체)
-    "listing_count_change": {"boom": -5.0, "recession": 10.0},
-    # 호가/실거래가 괴리율: 높을수록 침체
-    "price_gap_ratio": {"boom": 2.0, "recession": 8.0},
-    # 가격지수 변동: 낮을수록 침체 (음수 = 하락)
-    "regional_price_index": {"boom": 1.0, "recession": -1.0},
-    # 매물 소진 기간: 낮을수록 호황
-    "sale_speed": {"boom": 30.0, "recession": 90.0},
-    # 전세가율: 높을수록 투자 위험 (매매 침체)
+# V2 임계값: R-ONE 공식 통계 기반
+# 한국부동산원 지수와 실거래 데이터에서 도출한 기준
+THRESHOLDS_V2 = {
+    # 매매가격지수 변동률 (%)
+    #   호황: +0.3% 이상 상승 (월간)
+    #   침체: -0.3% 이하 하락
+    "sale_index_change": {"boom": 0.3, "recession": -0.3},
+    # 전세가율 (%)
+    #   호황: 55% 이하 (매매 강세)
+    #   침체: 75% 이상 (갭투자 위험)
     "jeonse_ratio": {"boom": 55.0, "recession": 75.0},
+    # 미분양 증감률 (%)
+    #   호황: -10% 이하 (미분양 감소)
+    #   침체: +10% 이상 (미분양 증가)
+    "unsold_change": {"boom": -10.0, "recession": 10.0},
+    # 거래량 변동률 (%)
+    #   호황: +10% 이상 (거래 활발)
+    #   침체: -10% 이하 (거래 위축)
+    "tx_count_change": {"boom": 10.0, "recession": -10.0},
+    # 매매수급동향 (지수, 100=균형)
+    #   호황: 105 이상 (수요 우위)
+    #   침체: 95 이하 (공급 우위)
+    "supply_demand": {"boom": 105.0, "recession": 95.0},
+    # 공매 증감률 (%)
+    #   호황: -10% 이하 (공매 감소)
+    #   침체: +10% 이상 (공매 증가)
+    "auction_change": {"boom": -10.0, "recession": 10.0},
 }
+
+V2_INDICATOR_KEYS = [
+    "sale_index_change", "jeonse_ratio", "unsold_change",
+    "tx_count_change", "supply_demand", "auction_change",
+]
 
 
 class EconomyAnalyzer:
-    """
-    부동산 경제 분석기
-
-    DB에서 매물/거래 데이터를 조회하고,
-    피처 엔지니어링 → 신호 판정 → LLM 분석 리포트 생성 파이프라인을 실행합니다.
-    """
-
     def __init__(self, db: AsyncSession):
         self.db = db
         self.rag_service = RAGService()
         self.llm_service = LLMService()
 
-    def _get_current_period(self) -> str:
-        """현재 연월 반환 (YYYYMM 형식)"""
+    @staticmethod
+    def _get_current_period() -> str:
         now = datetime.now()
         return f"{now.year}{str(now.month).zfill(2)}"
 
-    def _get_prev_period(self, period: str) -> str:
-        """전월 기간 반환"""
+    @staticmethod
+    def _get_prev_period(period: str) -> str:
         year = int(period[:4])
         month = int(period[4:6])
         if month == 1:
             return f"{year - 1}12"
         return f"{year}{str(month - 1).zfill(2)}"
 
-    async def _fetch_listings(
-        self, region: str, period: str
-    ) -> List[Dict]:
-        """DB에서 지역/기간 매물 데이터 조회"""
-        from datetime import date
-
+    async def _count_transactions(self, region: str, period: str) -> int:
+        """해당 지역/기간의 실거래 건수"""
         year = int(period[:4])
         month = int(period[4:6])
         start_date = date(year, month, 1)
         if month == 12:
-            from datetime import timedelta
-            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+            end_date = date(year + 1, 1, 1)
         else:
             end_date = date(year, month + 1, 1)
 
-        query = select(RealEstateListing).where(
-            and_(
-                RealEstateListing.region_code.startswith(region),
-                RealEstateListing.listed_at >= start_date,
-                RealEstateListing.listed_at < end_date,
-            )
-        )
-        result = await self.db.execute(query)
-        rows = result.scalars().all()
-
-        return [
-            {
-                "region_code": r.region_code,
-                "listing_price": float(r.listing_price) if r.listing_price else None,
-                "jeonse_price": float(r.jeonse_price) if r.jeonse_price else None,
-                "actual_price": float(r.actual_price) if r.actual_price else None,
-                "area_sqm": r.area_sqm,
-                "property_type": r.property_type,
-            }
-            for r in rows
-        ]
-
-    async def _fetch_transactions(
-        self, region: str, period: str
-    ) -> List[Dict]:
-        """DB에서 지역/기간 실거래가 데이터 조회"""
-        from datetime import date
-
-        year = int(period[:4])
-        month = int(period[4:6])
-        start_date = date(year, month, 1)
-        if month == 12:
-            from datetime import timedelta
-            end_date = date(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            end_date = date(year, month + 1, 1)
-
-        query = select(RealEstateTransaction).where(
+        query = select(func.count()).select_from(RealEstateTransaction).where(
             and_(
                 RealEstateTransaction.region_code.startswith(region),
                 RealEstateTransaction.deal_date >= start_date,
@@ -143,128 +113,89 @@ class EconomyAnalyzer:
             )
         )
         result = await self.db.execute(query)
-        rows = result.scalars().all()
+        return result.scalar() or 0
 
-        return [
-            {
-                "region_code": r.region_code,
-                "deal_amount": float(r.deal_amount) if r.deal_amount else None,
-                "area_sqm": r.area_sqm,
-                "deal_date": r.deal_date,
-                "property_type": r.property_type,
-            }
-            for r in rows
-        ]
+    async def _count_auctions(self, region: str, period: str) -> int:
+        """해당 지역/기간의 온비드 공매 건수"""
+        year = int(period[:4])
+        month = int(period[4:6])
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1)
+        else:
+            end_date = date(year, month + 1, 1)
 
-    def rule_based_signal(
-        self, indicators: Dict
-    ) -> Tuple[str, float]:
+        query = select(func.count()).select_from(RealEstateListing).where(
+            and_(
+                RealEstateListing.region_code.startswith(region),
+                RealEstateListing.source == "온비드",
+                RealEstateListing.listed_at >= start_date,
+                RealEstateListing.listed_at < end_date,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
+    def rule_based_signal(self, indicators: Dict) -> Tuple[str, float]:
         """
-        룰 기반 경제 신호 판정
+        V2 룰 기반 경제 신호 판정
 
-        6개 지표에 대해 각각 점수를 부여하고 합산하여 최종 신호를 결정합니다.
-
-        점수 체계:
-        - 호황 신호: +1점
-        - 보통 신호: 0점
-        - 침체 신호: -1점
-
-        최종 판정:
-        - 합계 >= 2: 호황
-        - 합계 <= -2: 침체
-        - 나머지: 보통
-
-        Args:
-            indicators: 6개 지표 딕셔너리
-
-        Returns:
-            (signal, confidence) 튜플
+        6개 지표별 점수 부여:
+          호황 방향: +1, 보통: 0, 침체 방향: -1
         """
         scores = []
         valid_count = 0
 
-        # 저가 매물 비율 (낮을수록 호황)
-        lpr = indicators.get("low_price_listing_ratio")
-        if lpr is not None:
+        for key in V2_INDICATOR_KEYS:
+            val = indicators.get(key)
+            if val is None:
+                continue
             valid_count += 1
-            if lpr <= THRESHOLDS["low_price_listing_ratio"]["boom"]:
-                scores.append(1)
-            elif lpr >= THRESHOLDS["low_price_listing_ratio"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
+            thresh = THRESHOLDS_V2[key]
 
-        # 매물 증감률 (감소할수록 호황)
-        lcc = indicators.get("listing_count_change")
-        if lcc is not None:
-            valid_count += 1
-            if lcc <= THRESHOLDS["listing_count_change"]["boom"]:
-                scores.append(1)
-            elif lcc >= THRESHOLDS["listing_count_change"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
-
-        # 호가/실거래가 괴리율 (낮을수록 호황)
-        pgr = indicators.get("price_gap_ratio")
-        if pgr is not None:
-            valid_count += 1
-            if pgr <= THRESHOLDS["price_gap_ratio"]["boom"]:
-                scores.append(1)
-            elif pgr >= THRESHOLDS["price_gap_ratio"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
-
-        # 가격지수 변동 (높을수록 호황)
-        rpi = indicators.get("regional_price_index")
-        if rpi is not None:
-            valid_count += 1
-            if rpi >= THRESHOLDS["regional_price_index"]["boom"]:
-                scores.append(1)
-            elif rpi <= THRESHOLDS["regional_price_index"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
-
-        # 매물 소진 기간 (짧을수록 호황)
-        ss = indicators.get("sale_speed")
-        if ss is not None:
-            valid_count += 1
-            if ss <= THRESHOLDS["sale_speed"]["boom"]:
-                scores.append(1)
-            elif ss >= THRESHOLDS["sale_speed"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
-
-        # 전세가율 (낮을수록 호황: 매매가 강세)
-        jr = indicators.get("jeonse_ratio")
-        if jr is not None:
-            valid_count += 1
-            if jr <= THRESHOLDS["jeonse_ratio"]["boom"]:
-                scores.append(1)
-            elif jr >= THRESHOLDS["jeonse_ratio"]["recession"]:
-                scores.append(-1)
-            else:
-                scores.append(0)
+            if key in ("sale_index_change", "tx_count_change"):
+                # 높을수록 호황
+                if val >= thresh["boom"]:
+                    scores.append(1)
+                elif val <= thresh["recession"]:
+                    scores.append(-1)
+                else:
+                    scores.append(0)
+            elif key == "supply_demand":
+                # 100 초과 = 수요 우위 = 호황
+                if val >= thresh["boom"]:
+                    scores.append(1)
+                elif val <= thresh["recession"]:
+                    scores.append(-1)
+                else:
+                    scores.append(0)
+            elif key == "jeonse_ratio":
+                # 낮을수록 호황
+                if val <= thresh["boom"]:
+                    scores.append(1)
+                elif val >= thresh["recession"]:
+                    scores.append(-1)
+                else:
+                    scores.append(0)
+            elif key in ("unsold_change", "auction_change"):
+                # 감소할수록 호황
+                if val <= thresh["boom"]:
+                    scores.append(1)
+                elif val >= thresh["recession"]:
+                    scores.append(-1)
+                else:
+                    scores.append(0)
 
         if not scores:
             return "보통", 0.0
 
         total_score = sum(scores)
         max_possible = len(scores)
-
-        # 신뢰도: 극단적 점수일수록 높음
         confidence = abs(total_score) / max_possible if max_possible > 0 else 0.0
-
-        # 데이터 충분성에 따라 신뢰도 조정 (6개 중 4개 이상이면 풀 신뢰)
         data_completeness = valid_count / 6
         confidence = confidence * data_completeness
 
-        # 신호 판정 (총점의 1/3 이상 극단이면 해당 신호)
         threshold = max(2, max_possible // 3)
-
         if total_score >= threshold:
             signal = "호황"
         elif total_score <= -threshold:
@@ -275,96 +206,81 @@ class EconomyAnalyzer:
         return signal, round(confidence, 3)
 
     async def analyze(
-        self,
-        region: str,
-        period: Optional[str] = None,
+        self, region: str, period: Optional[str] = None,
     ) -> RegionDetail:
-        """
-        지역별 종합 경제 분석
-
-        Args:
-            region: 지역 코드 (시도 2자리 또는 시군구 5자리)
-            period: 분석 기준 연월 (YYYYMM, 기본: 현재 월)
-
-        Returns:
-            RegionDetail 스키마 인스턴스
-        """
         if period is None:
             period = self._get_current_period()
 
         region_name = ANALYSIS_REGIONS.get(region[:2], f"지역({region})")
         prev_period = self._get_prev_period(period)
 
-        # DB에 이미 계산된 지표가 있으면 우선 반환 (API 응답 안정성/성능)
-        saved_indicator = await self._load_saved_indicator(region=region, period=period)
-        if saved_indicator is not None:
-            indicator_payload = {
-                "low_price_listing_ratio": saved_indicator.low_price_listing_ratio,
-                "listing_count_change": saved_indicator.listing_count_change,
-                "price_gap_ratio": saved_indicator.price_gap_ratio,
-                "regional_price_index": saved_indicator.regional_price_index,
-                "sale_speed": saved_indicator.sale_speed,
-                "jeonse_ratio": saved_indicator.jeonse_ratio,
-            }
+        # DB 캐시 확인
+        saved = await self._load_saved_indicator(region, period)
+        if saved is not None:
+            payload = {k: getattr(saved, k, None) for k in V2_INDICATOR_KEYS}
             return RegionDetail(
-                region_code=saved_indicator.region_code,
-                region_name=saved_indicator.region_name or region_name,
-                period=saved_indicator.period,
-                signal=saved_indicator.signal or "보통",
-                confidence=float(saved_indicator.confidence or 0.0),
-                indicators=IndicatorData(**indicator_payload),
+                region_code=saved.region_code,
+                region_name=saved.region_name or region_name,
+                period=saved.period,
+                signal=saved.signal or "보통",
+                confidence=float(saved.confidence or 0.0),
+                indicators=IndicatorData(**payload),
                 analysis_report=(
-                    f"{saved_indicator.region_name} {saved_indicator.period} 분석 결과를 DB에서 조회했습니다. "
-                    f"신호는 {saved_indicator.signal or '보통'}이며 신뢰도는 {float(saved_indicator.confidence or 0.0):.2f}입니다."
+                    f"{saved.region_name} {saved.period} 분석 결과. "
+                    f"신호: {saved.signal or '보통'}, 신뢰도: {float(saved.confidence or 0.0):.2f}"
                 ),
                 rag_context_count=0,
                 generated_at=datetime.now(),
             )
 
-        logger.info(f"Starting analysis: region={region}, period={period}")
+        logger.info(f"Starting V2 analysis: region={region}, period={period}")
 
-        # 데이터 수집 (병렬)
-        current_listings, current_transactions, prev_listings, prev_transactions = (
+        # R-ONE + 국토부 + 온비드 데이터 병렬 수집
+        from app.data.collectors.reb_api import fetch_all_reb_monthly, fetch_weekly_supply_demand
+
+        reb_current, reb_prev, cur_tx, prev_tx, cur_auction, prev_auction = (
             await asyncio.gather(
-                self._fetch_listings(region, period),
-                self._fetch_transactions(region, period),
-                self._fetch_listings(region, prev_period),
-                self._fetch_transactions(region, prev_period),
+                fetch_all_reb_monthly(period),
+                fetch_all_reb_monthly(prev_period),
+                self._count_transactions(region, period),
+                self._count_transactions(region, prev_period),
+                self._count_auctions(region, period),
+                self._count_auctions(region, prev_period),
             )
         )
 
-        logger.info(
-            f"Data fetched: listings={len(current_listings)}, "
-            f"transactions={len(current_transactions)}"
-        )
+        # 주간 수급동향 (최근 주차 추정: period의 마지막 주)
+        month = int(period[4:6])
+        approx_week = f"{period[:4]}{month * 4:02d}"
+        supply_demand_data = await fetch_weekly_supply_demand(approx_week)
+        reb_current["supply_demand"] = supply_demand_data
 
         # 피처 엔지니어링
-        from app.data.processors.feature_engineer import compute_all_indicators
+        from app.data.processors.feature_engineer import compute_all_indicators_v2
 
-        jeonse_listings = [l for l in current_listings if l.get("jeonse_price")]
-
-        raw_indicators = compute_all_indicators(
+        raw_indicators = compute_all_indicators_v2(
             region=region,
             period=period,
-            current_listings=current_listings,
-            prev_listings=prev_listings,
-            current_transactions=current_transactions,
-            prev_transactions=prev_transactions,
-            jeonse_listings=jeonse_listings if jeonse_listings else None,
+            reb_data=reb_current,
+            prev_reb_data=reb_prev,
+            current_tx_count=cur_tx,
+            prev_tx_count=prev_tx,
+            current_auction_count=cur_auction,
+            prev_auction_count=prev_auction,
         )
 
         # 룰 기반 신호 판정
         signal, confidence = self.rule_based_signal(raw_indicators)
 
-        # RAG 컨텍스트 검색
+        # RAG 컨텍스트
         query_text = f"{region_name} 부동산 시장 {period} {signal} 분석"
         context = await self.rag_service.retrieve(
             query=query_text,
-            region=region[:2],  # 시도 단위로 검색
+            region=region[:2],
             indicators={**raw_indicators, "signal": signal},
         )
 
-        # LLM 분석 리포트 생성
+        # LLM 분석 리포트
         analysis_report = await self.llm_service.analyze(
             indicators=raw_indicators,
             context=context,
@@ -373,7 +289,7 @@ class EconomyAnalyzer:
             period=period,
         )
 
-        # 분석 결과 벡터 스토어 저장 (향후 RAG 활용)
+        # 벡터스토어 저장
         await self.rag_service.add_analysis_to_store(
             region_code=region,
             region_name=region_name,
@@ -383,7 +299,7 @@ class EconomyAnalyzer:
             analysis_text=analysis_report,
         )
 
-        # DB에 지표 저장
+        # DB 저장
         await self._save_indicators(
             region_code=region,
             region_name=region_name,
@@ -393,41 +309,25 @@ class EconomyAnalyzer:
             confidence=confidence,
         )
 
-        indicator_data = IndicatorData(**raw_indicators)
-
         return RegionDetail(
             region_code=region,
             region_name=region_name,
             period=period,
             signal=signal,
             confidence=confidence,
-            indicators=indicator_data,
+            indicators=IndicatorData(**raw_indicators),
             analysis_report=analysis_report,
             rag_context_count=context.count("[참고 ") if context else 0,
             generated_at=datetime.now(),
         )
 
-    async def get_overview(
-        self,
-        period: Optional[str] = None,
-    ) -> EconomyOverview:
-        """
-        전국 경제 상황 요약
-
-        주요 지역별 분석을 병렬 수행하고 전국 요약을 생성합니다.
-
-        Args:
-            period: 분석 기준 연월
-
-        Returns:
-            EconomyOverview 스키마 인스턴스
-        """
+    async def get_overview(self, period: Optional[str] = None) -> EconomyOverview:
         if period is None:
             period = self._get_current_period()
 
         logger.info(f"Computing national overview for period={period}")
 
-        # DB 저장 지표가 있으면 우선 집계
+        # DB 캐시 확인
         db_rows = (
             await self.db.execute(
                 select(EconomyIndicator).where(EconomyIndicator.period == period)
@@ -435,103 +335,80 @@ class EconomyAnalyzer:
         ).scalars().all()
 
         if db_rows:
-            region_signals: List[RegionSignal] = []
-            all_indicators: List[Dict] = []
+            return self._build_overview_from_db(db_rows, period)
 
-            for row in db_rows:
-                indicator_payload = {
-                    "low_price_listing_ratio": row.low_price_listing_ratio,
-                    "listing_count_change": row.listing_count_change,
-                    "price_gap_ratio": row.price_gap_ratio,
-                    "regional_price_index": row.regional_price_index,
-                    "sale_speed": row.sale_speed,
-                    "jeonse_ratio": row.jeonse_ratio,
-                }
-                indicator_data = IndicatorData(**indicator_payload)
-                region_signals.append(
-                    RegionSignal(
-                        region_code=row.region_code,
-                        region_name=row.region_name,
-                        signal=row.signal or "보통",
-                        confidence=float(row.confidence or 0.0),
-                        indicators=indicator_data,
-                    )
+        # 전 지역 병렬 분석
+        results = await asyncio.gather(
+            *[self._safe_analyze(r, period) for r in ANALYSIS_REGIONS.keys()]
+        )
+        return self._build_overview_from_results(
+            [r for r in results if r is not None], period
+        )
+
+    def _build_overview_from_db(
+        self, rows: List[EconomyIndicator], period: str
+    ) -> EconomyOverview:
+        region_signals = []
+        all_indicators = []
+
+        for row in rows:
+            payload = {k: getattr(row, k, None) for k in V2_INDICATOR_KEYS}
+            ind = IndicatorData(**payload)
+            region_signals.append(
+                RegionSignal(
+                    region_code=row.region_code,
+                    region_name=row.region_name,
+                    signal=row.signal or "보통",
+                    confidence=float(row.confidence or 0.0),
+                    indicators=ind,
                 )
-                all_indicators.append(indicator_data.model_dump())
-
-            boom_count = sum(1 for r in region_signals if r.signal == "호황")
-            normal_count = sum(1 for r in region_signals if r.signal == "보통")
-            recession_count = sum(1 for r in region_signals if r.signal == "침체")
-            national_avg = self._compute_national_avg(all_indicators)
-            summary = self._generate_overview_summary(
-                period=period,
-                boom=boom_count,
-                normal=normal_count,
-                recession=recession_count,
-                total=len(region_signals),
-                national_avg=national_avg,
             )
+            all_indicators.append(ind.model_dump())
 
-            return EconomyOverview(
-                period=period,
-                total_regions=len(region_signals),
-                boom_count=boom_count,
-                normal_count=normal_count,
-                recession_count=recession_count,
-                national_avg_indicators=IndicatorData(**national_avg),
-                regions=region_signals,
-                summary=summary,
-                generated_at=datetime.now(),
-            )
+        return self._finalize_overview(region_signals, all_indicators, period)
 
-        # 주요 지역 병렬 분석 (오류 발생 지역은 스킵)
-        region_tasks = [
-            self._safe_analyze(region, period)
-            for region in ANALYSIS_REGIONS.keys()
-        ]
-        results = await asyncio.gather(*region_tasks)
+    def _build_overview_from_results(
+        self, results: List[RegionDetail], period: str
+    ) -> EconomyOverview:
+        region_signals = []
+        all_indicators = []
 
-        # 유효한 결과만 필터링
-        region_signals: List[RegionSignal] = []
-        all_indicators: List[Dict] = []
-
-        for result in results:
-            if result is not None:
-                region_signals.append(
-                    RegionSignal(
-                        region_code=result.region_code,
-                        region_name=result.region_name,
-                        signal=result.signal,
-                        confidence=result.confidence,
-                        indicators=result.indicators,
-                    )
+        for r in results:
+            region_signals.append(
+                RegionSignal(
+                    region_code=r.region_code,
+                    region_name=r.region_name,
+                    signal=r.signal,
+                    confidence=r.confidence,
+                    indicators=r.indicators,
                 )
-                all_indicators.append(result.indicators.model_dump())
+            )
+            all_indicators.append(r.indicators.model_dump())
 
-        # 카운팅
-        boom_count = sum(1 for r in region_signals if r.signal == "호황")
-        normal_count = sum(1 for r in region_signals if r.signal == "보통")
-        recession_count = sum(1 for r in region_signals if r.signal == "침체")
+        return self._finalize_overview(region_signals, all_indicators, period)
 
-        # 전국 평균 지표 계산
+    def _finalize_overview(
+        self,
+        region_signals: List[RegionSignal],
+        all_indicators: List[Dict],
+        period: str,
+    ) -> EconomyOverview:
+        boom = sum(1 for r in region_signals if r.signal == "호황")
+        normal = sum(1 for r in region_signals if r.signal == "보통")
+        recession = sum(1 for r in region_signals if r.signal == "침체")
         national_avg = self._compute_national_avg(all_indicators)
-
-        # 전국 요약 텍스트 생성
         summary = self._generate_overview_summary(
-            period=period,
-            boom=boom_count,
-            normal=normal_count,
-            recession=recession_count,
-            total=len(region_signals),
+            period=period, boom=boom, normal=normal,
+            recession=recession, total=len(region_signals),
             national_avg=national_avg,
         )
 
         return EconomyOverview(
             period=period,
             total_regions=len(region_signals),
-            boom_count=boom_count,
-            normal_count=normal_count,
-            recession_count=recession_count,
+            boom_count=boom,
+            normal_count=normal,
+            recession_count=recession,
             national_avg_indicators=IndicatorData(**national_avg),
             regions=region_signals,
             summary=summary,
@@ -539,19 +416,14 @@ class EconomyAnalyzer:
         )
 
     async def _load_saved_indicator(
-        self,
-        region: str,
-        period: str,
+        self, region: str, period: str
     ) -> Optional[EconomyIndicator]:
-        """요청 지역/기간에 대응되는 저장 지표 조회"""
         query = (
             select(EconomyIndicator)
-            .where(
-                and_(
-                    EconomyIndicator.period == period,
-                    EconomyIndicator.region_code.startswith(region),
-                )
-            )
+            .where(and_(
+                EconomyIndicator.period == period,
+                EconomyIndicator.region_code.startswith(region),
+            ))
             .order_by(EconomyIndicator.created_at.desc())
             .limit(1)
         )
@@ -561,7 +433,6 @@ class EconomyAnalyzer:
     async def _safe_analyze(
         self, region: str, period: str
     ) -> Optional[RegionDetail]:
-        """오류 발생 시 None 반환하는 안전한 analyze 래퍼"""
         try:
             return await self.analyze(region=region, period=period)
         except Exception as e:
@@ -577,28 +448,22 @@ class EconomyAnalyzer:
         signal: str,
         confidence: float,
     ) -> None:
-        """계산된 지표를 DB에 저장 (upsert 방식)"""
         try:
-            # 기존 레코드 조회
             existing = await self.db.execute(
-                select(EconomyIndicator).where(
-                    and_(
-                        EconomyIndicator.region_code == region_code,
-                        EconomyIndicator.period == period,
-                    )
-                )
+                select(EconomyIndicator).where(and_(
+                    EconomyIndicator.region_code == region_code,
+                    EconomyIndicator.period == period,
+                ))
             )
             record = existing.scalar_one_or_none()
 
             if record:
-                # 업데이트
                 record.signal = signal
                 record.confidence = confidence
                 for key, value in indicators.items():
                     if hasattr(record, key):
                         setattr(record, key, value)
             else:
-                # 신규 생성
                 record = EconomyIndicator(
                     region_code=region_code,
                     region_name=region_name,
@@ -610,46 +475,28 @@ class EconomyAnalyzer:
                 self.db.add(record)
 
             await self.db.flush()
-
         except Exception as e:
             logger.error(f"Failed to save indicators: {e}")
 
     @staticmethod
     def _compute_national_avg(all_indicators: List[Dict]) -> Dict:
-        """전국 평균 지표 계산"""
         if not all_indicators:
-            return {k: None for k in ["low_price_listing_ratio", "listing_count_change",
-                                       "price_gap_ratio", "regional_price_index",
-                                       "sale_speed", "jeonse_ratio"]}
-
-        keys = ["low_price_listing_ratio", "listing_count_change",
-                "price_gap_ratio", "regional_price_index",
-                "sale_speed", "jeonse_ratio"]
+            return {k: None for k in V2_INDICATOR_KEYS}
 
         result = {}
-        for key in keys:
+        for key in V2_INDICATOR_KEYS:
             values = [ind.get(key) for ind in all_indicators if ind.get(key) is not None]
-            if values:
-                result[key] = round(sum(values) / len(values), 2)
-            else:
-                result[key] = None
-
+            result[key] = round(sum(values) / len(values), 2) if values else None
         return result
 
     @staticmethod
     def _generate_overview_summary(
-        period: str,
-        boom: int,
-        normal: int,
-        recession: int,
-        total: int,
-        national_avg: Dict,
+        period: str, boom: int, normal: int, recession: int,
+        total: int, national_avg: Dict,
     ) -> str:
-        """전국 경제 상황 요약 텍스트 생성"""
         year = period[:4]
         month = period[4:6]
 
-        # 전반적 시장 판단
         if boom > recession and boom > normal:
             overall = "전반적으로 호황세를 보이고 있습니다"
         elif recession > boom and recession > normal:
@@ -657,21 +504,27 @@ class EconomyAnalyzer:
         else:
             overall = "전반적으로 관망세가 지속되고 있습니다"
 
-        # 지표 하이라이트
         highlights = []
-        if national_avg.get("jeonse_ratio") is not None:
-            jr = national_avg["jeonse_ratio"]
+        jr = national_avg.get("jeonse_ratio")
+        if jr is not None:
             if jr >= 70:
-                highlights.append(f"전국 평균 전세가율이 {jr:.1f}%로 높은 수준")
+                highlights.append(f"전국 평균 전세가율 {jr:.1f}%로 높은 수준")
             elif jr < 60:
-                highlights.append(f"전국 평균 전세가율이 {jr:.1f}%로 낮아 매매 강세")
+                highlights.append(f"전국 평균 전세가율 {jr:.1f}%로 매매 강세")
 
-        if national_avg.get("regional_price_index") is not None:
-            rpi = national_avg["regional_price_index"]
-            if rpi > 0:
-                highlights.append(f"가격지수 전월 대비 {rpi:.1f}% 상승")
-            elif rpi < 0:
-                highlights.append(f"가격지수 전월 대비 {abs(rpi):.1f}% 하락")
+        sic = national_avg.get("sale_index_change")
+        if sic is not None:
+            if sic > 0:
+                highlights.append(f"매매가격지수 전월 대비 {sic:.2f}% 상승")
+            elif sic < 0:
+                highlights.append(f"매매가격지수 전월 대비 {abs(sic):.2f}% 하락")
+
+        sd = national_avg.get("supply_demand")
+        if sd is not None:
+            if sd > 105:
+                highlights.append(f"매매수급동향 {sd:.1f}으로 수요 우위")
+            elif sd < 95:
+                highlights.append(f"매매수급동향 {sd:.1f}으로 공급 우위")
 
         highlight_text = ", ".join(highlights) if highlights else "지표 집계 중"
 
