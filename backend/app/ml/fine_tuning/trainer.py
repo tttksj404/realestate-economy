@@ -75,7 +75,7 @@ class FineTuner:
             "quantization_config": bnb_config,
             "device_map": "auto",           # GPU/CPU 자동 배치
             "trust_remote_code": True,
-            "torch_dtype": torch.bfloat16,
+            "dtype": torch.bfloat16,
         }
 
         if use_flash_attention:
@@ -253,28 +253,27 @@ class FineTuner:
             learning_rate=lr,
             weight_decay=weight_decay,
             lr_scheduler_type="cosine",     # 코사인 학습률 스케줄러
-            warmup_ratio=warmup_ratio,
-            max_seq_length=max_seq_length,
+            warmup_steps=warmup_ratio,      # 1 미만 실수는 전체 스텝 대비 비율
+            max_length=max_seq_length,
             dataset_text_field="text",
             packing=False,                  # 시퀀스 패킹 비활성화
             save_strategy="steps",
             save_steps=save_steps,
             save_total_limit=3,             # 최근 3개 체크포인트만 보관
-            evaluation_strategy="steps" if eval_dataset else "no",
+            eval_strategy="steps" if eval_dataset else "no",
             eval_steps=save_steps if eval_dataset else None,
             logging_steps=logging_steps,
-            logging_dir=os.path.join(output_dir, "logs"),
             fp16=False,
             bf16=True,                      # bfloat16으로 학습 (Ampere GPU 권장)
             report_to="none",               # wandb/tensorboard 미사용 (선택 변경 가능)
             load_best_model_at_end=True if eval_dataset else False,
             metric_for_best_model="eval_loss" if eval_dataset else None,
-            group_by_length=True,           # 유사 길이 시퀀스 묶기 (패딩 최소화)
+            train_sampling_strategy="group_by_length",  # 유사 길이 시퀀스 묶기 (패딩 최소화)
         )
 
         trainer = SFTTrainer(
             model=self.model,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             args=sft_config,

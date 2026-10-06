@@ -357,7 +357,7 @@ class ModelEvaluator:
             )
             model_kwargs["quantization_config"] = bnb_config
         else:
-            model_kwargs["torch_dtype"] = torch.float16
+            model_kwargs["dtype"] = torch.float16
 
         self.model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
         self.model.eval()
